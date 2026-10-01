@@ -31,6 +31,7 @@ export class Network {
   async init() {
     if (!this.client) return;
     this.client.auth.onAuthStateChange((event, session) => {
+      if (session?.user.id !== this.session?.user.id) this.profileReady = false;
       this.session = session;
       this.nickname = session ? read<string | null>(`nickname:${session.user.id}`, null) : null;
       this.onChange();

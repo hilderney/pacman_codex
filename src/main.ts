@@ -31,7 +31,7 @@ const sound = new Synth(settings), network = new Network();
 
 app.innerHTML = `
   <header class="topbar">
-    <button class="brand" data-action="home" aria-label="${t.title}"><img src="/favicon.svg" alt=""/><span>NEON MAZE<small>${t.arcade}</small></span></button>
+    <button class="brand" data-action="home" aria-label="${t.title}"><img src="/favicon.svg" alt=""/><span>${t.title.toUpperCase()}<small>${t.arcade}</small></span></button>
     <nav aria-label="${t.title}"><button class="nav-link active" data-action="home">${t.play}</button><button class="nav-link" data-action="ranking">${t.ranking}</button><button class="nav-link" data-action="settings">${t.settings}</button></nav>
     <div class="header-right"><span id="connection" class="connection"></span><button id="mute" class="icon-button" data-action="mute"></button></div>
   </header>
@@ -78,7 +78,7 @@ function gameIntro() {
     <div class="instructions"><h2 class="eyebrow">${t.controls}</h2><div class="key-cluster"><kbd>↑</kbd><div><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd></div></div><p>${t.howMoveBody}</p><span class="micro">${t.pauseHint}</span></div>`;
 }
 function updateAccount() {
-  $('#account').innerHTML = network.nickname ? `<span>${t.signedIn}<br/><b>${escape(network.nickname)}</b></span><button class="text-button" data-action="signout">${t.signOut}</button>` : `<span>${t.guestHint}</span>`;
+  $('#account').innerHTML = network.nickname ? `<span>${t.signedIn}<br/><b>${escape(network.nickname)}</b></span><button class="text-button" data-action="signout">${t.signOut}</button>` : network.session ? `<button class="text-button" data-action="nickname">${t.chooseNickname}</button><button class="text-button" data-action="signout">${t.signOut}</button>` : `<span>${t.guestHint}</span>`;
   if (screen === 'home') homeIntro();
   if (network.session && !network.nickname && network.profileReady && !nicknameDeferred && !dialog.open) showNickname();
   if (network.nickname && dialog.dataset.kind === 'nickname') closeDialog();
@@ -121,7 +121,7 @@ async function onOver(result: RunResult) {
   const best = saveBest(result.score); $('#best').textContent = format(best);
   // Ownership is captured at the START, never inferred from a later session.
   queueRun(owner, result);
-  $('#intro').innerHTML = `<span class="eyebrow accent">${t.over}</span><h1>${t.headlineB}<br/><em>OUT.</em></h1><p class="intro-copy">${t.overBody}</p>
+  $('#intro').innerHTML = `<span class="eyebrow accent">${t.over}</span><h1>${t.lights}<br/><em>${t.out}</em></h1><p class="intro-copy">${t.overBody}</p>
     <div class="final-scores"><div><span class="micro">${t.finalScore}</span><strong>${format(result.score)}</strong></div><div><span class="micro">${t.record}</span><strong>${format(best)}</strong></div></div>
     <p class="sync-status" id="sync-status">${owner ? t.pending : t.localOnly}</p><button class="primary" data-action="again">${svg('play')}${t.again}${svg('arrow')}</button><button class="text-button" data-action="ranking">${t.ranking}${svg('arrow')}</button><button class="text-button" data-action="home">${t.menu}</button>`;
   if (owner) {
@@ -169,6 +169,7 @@ app.addEventListener('click', async event => {
   else if (action === 'stay') { closeDialog(); if (game.paused) togglePause(); }
   else if (action === 'ranking') void showRanking();
   else if (action === 'settings') showSettings();
+  else if (action === 'nickname') { nicknameDeferred = false; showNickname(); }
   else if (action === 'close') { if (dialog.dataset.kind === 'nickname') nicknameDeferred = true; closeDialog(); }
   else if (action === 'mute') { settings.muted = !settings.muted; saveSettings(); }
   else if (action === 'defaults') { settings = defaults(); saveSettings(); showSettings(); }
@@ -198,7 +199,7 @@ app.addEventListener('submit', async event => {
   if (!/^[A-Za-z0-9_]{3,12}$/.test(nickname)) { $('#nickname-error').textContent = t.nicknameInvalid; return; }
   const button = $<HTMLButtonElement>('#nickname-form button'); button.disabled = true;
   try { await network.claim(nickname); closeDialog(); }
-  catch (error) { $('#nickname-error').textContent = (error as { code?: string }).code === '23505' ? t.nicknameTaken : t.nicknameError; }
+  catch (error) { const target = $('#nickname-error'); if (target) target.textContent = (error as { code?: string }).code === '23505' ? t.nicknameTaken : t.nicknameError; }
   finally { button.disabled = false; }
 });
 window.addEventListener('keydown', event => {

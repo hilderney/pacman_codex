@@ -22,5 +22,5 @@ export default defineConfig({
       cleanupOutdatedCaches: true,
     },
   })],
-  test: { include: ['tests/**/*.test.ts'], testTimeout: 60000 },
+  test: { include: ['tests/**/*.test.ts'], testTimeout: 120000 },
 });

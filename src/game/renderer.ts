@@ -22,7 +22,7 @@ export class Renderer {
     for (let y = 0; y < maze.height; y++) for (let x = 0; x < maze.width; x++) {
       const tile = maze.tiles[y][x], px = x * TILE, py = y * TILE;
       if (tile === Tile.Wall) {
-        ctx.fillStyle = '#0d1c27'; ctx.fillRect(px + 2, py + 2, 16, 16);
+        ctx.fillStyle = '#0d1c27'; ctx.fillRect(px, py, TILE, TILE);
         const floor = (nx: number, ny: number) => maze.tiles[ny]?.[nx] !== undefined && maze.tiles[ny][nx] !== Tile.Wall;
         ctx.beginPath();
         if (floor(x, y - 1)) { ctx.moveTo(px + 1, py + 3); ctx.lineTo(px + 19, py + 3); }
