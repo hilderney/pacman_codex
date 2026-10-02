@@ -3,11 +3,11 @@ import { registerSW } from 'virtual:pwa-register';
 import { Game, speedMultiplier, type RunResult } from './game/engine';
 import { Renderer, COLORS } from './game/renderer';
 import { DIRECTIONS, type Direction } from './game/types';
-import { en as t } from './i18n/en';
+import { numberLocale, t } from './i18n';
 import { Synth } from './services/audio';
 import { Controls } from './services/controls';
 import { Network, queueRun } from './services/network';
-import { bestScore, defaults, loadSettings, saveBest, storageAvailable, write } from './services/storage';
+import { bestScore, defaults, loadLocale, loadSettings, saveBest, saveLocale, storageAvailable, write, type LocalePreference } from './services/storage';
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
 const icon = (kind: string) => ({
@@ -22,18 +22,21 @@ const icon = (kind: string) => ({
 }[kind] ?? '');
 const svg = (kind: string) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${icon(kind)}</svg>`;
 const escape = (value: string) => value.replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[c]!);
-const format = (value: number) => Math.floor(value).toLocaleString('en-US');
+const format = (value: number) => Math.floor(value).toLocaleString(numberLocale);
 let settings = loadSettings(), game = new Game(72641), screen: 'home' | 'game' | 'over' = 'home';
 let owner: string | null = null, previous = 0, accumulator = 0, lastHud = 0;
+let lastCheckpoint: { runId: string; score: number; level: number } | null = null;
 let pendingCapture: { direction: Direction; index: number } | null = null;
 let nicknameDeferred = false, rankingRequest = 0;
 const sound = new Synth(settings), network = new Network();
+let deviceBest = bestScore(), runStartBest = deviceBest, recordCelebrated = false;
+let recordAnimationTimeout: ReturnType<typeof setTimeout>;
 
 app.innerHTML = `
   <header class="topbar">
     <button class="brand" data-action="home" aria-label="${t.title}"><img src="/favicon.svg" alt=""/><span>${t.title.toUpperCase()}<small>${t.arcade}</small></span></button>
     <nav aria-label="${t.title}"><button class="nav-link active" data-action="home">${t.play}</button><button class="nav-link" data-action="ranking">${t.ranking}</button><button class="nav-link" data-action="settings">${t.settings}</button></nav>
-    <div class="header-right"><span id="connection" class="connection"></span><button id="mute" class="icon-button" data-action="mute"></button></div>
+    <div class="header-right"><span id="connection" class="connection"></span><select id="locale" class="locale-select" aria-label="${t.localeLabel}"><option value="auto">Auto</option><option value="en">English</option><option value="pt-BR">Português</option></select><button id="mute" class="icon-button" data-action="mute"></button></div>
   </header>
   <main class="arcade">
     <section class="intro" id="intro"></section>
@@ -44,7 +47,7 @@ app.innerHTML = `
       <div class="cabinet-bottom"><span><i class="status-dot"></i><span id="mode">${t.board}</span></span><span id="board-seed"></span><button class="icon-button" id="pause-button" data-action="pause" aria-label="${t.pause}" hidden>${svg('pause')}</button></div>
     </section>
     <aside class="rail">
-      <div class="record-card"><span class="eyebrow">${t.yourRun}</span><div class="record-icon">${svg('trophy')}</div><span class="micro">${t.localBest}</span><strong id="best">${format(bestScore())}</strong><div id="account" class="account"></div></div>
+      <div class="record-card" id="record-card"><span class="eyebrow">${t.yourRun}</span><div class="record-icon">${svg('trophy')}</div><div class="record-stats"><div><span class="micro" id="best-label">${t.localBest}</span><strong id="best">${format(deviceBest)}</strong></div><div><span class="micro">${t.currentRun}</span><strong id="current-run">0</strong></div></div><div id="account" class="account"></div></div>
       <div class="echoes"><h2 class="eyebrow">${t.echoes}</h2>${t.personalities.map((name, i) => `<div class="echo-row"><span class="echo-shape" style="--echo:${COLORS[i]}"><i></i></span><div><strong>${name}</strong><small>${t.traits[i]}</small></div></div>`).join('')}</div>
       <div class="legend"><div><i class="legend-spark"></i>${t.sparkLabel}<span>10</span></div><div><i class="legend-power"></i>${t.powerLabel}<span>50</span></div><div><i class="legend-fruit"></i>${t.fruitLabel}<span>100–1,000</span></div></div>
     </aside>
@@ -95,13 +98,36 @@ function updateMute() {
   sound.configure(settings);
 }
 function saveSettings() { write('settings', settings); controls.settings = settings; updateMute(); }
+function resetRecordCard() {
+  runStartBest = deviceBest; recordCelebrated = false; clearTimeout(recordAnimationTimeout);
+  $('#record-card').classList.remove('record-hit'); $('#best-label').textContent = t.localBest;
+  $('#best').textContent = format(deviceBest); $('#current-run').textContent = '0';
+}
+function updateRecordCard() {
+  $('#current-run').textContent = format(screen === 'home' ? 0 : game.score);
+  if (game.peakScore <= deviceBest) return;
+  deviceBest = saveBest(game.peakScore); $('#best').textContent = format(deviceBest);
+  if (recordCelebrated || game.peakScore <= runStartBest) return;
+  recordCelebrated = true; $('#best-label').textContent = t.bestStrike; sound.play('record');
+  const card = $('#record-card'); card.classList.remove('record-hit'); void card.offsetWidth; card.classList.add('record-hit');
+  recordAnimationTimeout = setTimeout(() => card.classList.remove('record-hit'), 1800);
+}
 function start(authenticated: boolean) {
   if (authenticated && (!network.session || !network.nickname)) { showNickname(); return; }
   closeDialog(); owner = authenticated ? network.session!.user.id : null;
-  game = new Game(); game.onSound = effect => sound.play(effect); game.onOver = onOver;
+  game = new Game(); game.onSound = effect => sound.play(effect); game.onProgress = syncProgress; game.onOver = onOver;
+  lastCheckpoint = null; resetRecordCard();
   screen = 'game'; document.body.dataset.screen = screen; gameIntro();
   $('#pause-button').hidden = false; $('#pause-cover').hidden = true; canvas.focus();
   accumulator = 0;
+}
+function syncProgress(result: RunResult) {
+  // Guest runs stay local. For signed-in runs, queueRun coalesces checkpoints
+  // and Network.flush applies the server-side best-score/rate-limit rules.
+  const newer = !lastCheckpoint || lastCheckpoint.runId !== result.runId
+    || result.score > lastCheckpoint.score || result.level > lastCheckpoint.level;
+  if (newer) { queueRun(owner, result); lastCheckpoint = { runId: result.runId, score: result.score, level: result.level }; }
+  updateRecordCard(); void network.flush();
 }
 function togglePause() {
   if (screen !== 'game') return;
@@ -115,13 +141,13 @@ function home(force = false) {
     showDialog('leave', `<span class="eyebrow">${t.title}</span><h2>${t.abandonTitle}</h2><p>${t.abandonBody}</p><div class="dialog-actions"><button class="primary" data-action="stay">${t.stay}</button><button class="secondary" data-action="leave">${t.leave}</button></div>`); return;
   }
   closeDialog(); screen = 'home'; game = new Game(72641); owner = null;
-  document.body.dataset.screen = screen; $('#pause-button').hidden = true; $('#pause-cover').hidden = true; homeIntro();
+  document.body.dataset.screen = screen; $('#pause-button').hidden = true; $('#pause-cover').hidden = true; resetRecordCard(); homeIntro();
 }
 async function onOver(result: RunResult) {
   screen = 'over'; document.body.dataset.screen = screen; $('#pause-button').hidden = true;
-  const best = saveBest(result.score); $('#best').textContent = format(best);
+  updateRecordCard(); const best = deviceBest;
   // Ownership is captured at the START, never inferred from a later session.
-  queueRun(owner, result);
+  syncProgress(result);
   $('#intro').innerHTML = `<span class="eyebrow accent">${t.over}</span><h1>${t.lights}<br/><em>${t.out}</em></h1><p class="intro-copy">${t.overBody}</p>
     <div class="final-scores"><div><span class="micro">${t.finalScore}</span><strong>${format(result.score)}</strong></div><div><span class="micro">${t.record}</span><strong>${format(best)}</strong></div></div>
     <p class="run-summary">${t.finalBalance}: ${format(result.balance ?? 0)}<br/>${t.deaths}: ${result.deaths ?? 0} · ${t.cleared}: ${result.cleared ?? 0}</p>
@@ -235,6 +261,7 @@ function frame(now: number) {
   if (now - lastHud > 100) {
     lastHud = now; $('#score').textContent = String(game.score).padStart(6, '0'); $('#level').textContent = String(game.level).padStart(2, '0');
     $('#deaths').textContent = String(game.deaths); $('#cleared').textContent = String(game.cleared);
+    updateRecordCard();
     $('#peak').textContent = format(game.peakScore); $('#penalty').textContent = `−${format(game.nextPenalty)}`;
     $('#speed').textContent = `${speedMultiplier(game.level).toFixed(2)}×`;
     $('#board-seed').textContent = `${t.seed} ${game.maze.seed.toString(16).toUpperCase().slice(-6)}`;
@@ -243,6 +270,15 @@ function frame(now: number) {
   }
   requestAnimationFrame(frame);
 }
+const localeSelect = $<HTMLSelectElement>('#locale');
+localeSelect.value = loadLocale();
+localeSelect.addEventListener('change', () => {
+  const next = localeSelect.value;
+  if (next !== 'auto' && next !== 'en' && next !== 'pt-BR') return;
+  if (next === loadLocale()) return;
+  saveLocale(next as LocalePreference);
+  location.reload();
+});
 homeIntro(); updateAccount(); updateConnection(); updateMute(); requestAnimationFrame(frame); void network.init();
 if (!storageAvailable) toast(t.storageWarning);
 registerSW({ onOfflineReady: () => { $('#offline-ready').textContent = t.offlineReady; }, onNeedRefresh: () => toast(t.update), onRegisterError: () => { $('#offline-ready').textContent = t.offline; } });

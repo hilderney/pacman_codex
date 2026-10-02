@@ -35,3 +35,10 @@ export function loadSettings(): Settings {
 }
 export function bestScore() { const n = read<number>('best', 0); return Number.isSafeInteger(n) && n > 0 ? n : 0; }
 export function saveBest(score: number) { const best = Math.max(bestScore(), score); write('best', best); return best; }
+
+export type LocalePreference = 'auto' | 'en' | 'pt-BR';
+export function loadLocale(): LocalePreference {
+  const value = read<string>('locale', 'auto');
+  return value === 'en' || value === 'pt-BR' ? value : 'auto';
+}
+export function saveLocale(locale: LocalePreference) { write('locale', locale); }

@@ -1,4 +1,4 @@
-import { en } from '../i18n/en';
+import { numberLocale, t } from '../i18n';
 import { Game, visualPosition } from './engine';
 import { Tile, type Point } from './types';
 
@@ -71,7 +71,7 @@ export class Renderer {
       ctx.fillRect(-4, -2, 2.5, 3); ctx.fillRect(1.5, -2, 2.5, 3); ctx.restore();
     }
     if (!attract && game.phase !== 'playing' && game.phase !== 'over') {
-      this.banner(game.phase === 'ready' ? en.ready : game.phase === 'level-clear' ? en.clear : `${en.caught}  −${game.lastPenalty.toLocaleString('en-US')}`);
+      this.banner(game.phase === 'ready' ? t.ready : game.phase === 'level-clear' ? t.clear : `${t.caught}  −${game.lastPenalty.toLocaleString(numberLocale)}`);
     }
   }
   private player(p: Point, direction: string, time: number, scale: number) {

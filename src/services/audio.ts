@@ -33,12 +33,13 @@ export class Synth {
     const patches: Record<SoundEvent, number[]> = {
       dot: [720, 1050], power: [260, 520, 1040], ghost: [430, 860, 1290],
       death: [420, 260, 120, 55], start: [330, 440, 660, 880], fruit: [620, 930, 1240],
+      record: [523, 659, 784, 1047, 1319],
     };
-    const step = sound === 'dot' ? .035 : .09;
+    const step = sound === 'dot' ? .035 : sound === 'record' ? .11 : .09;
     patches[sound].forEach((frequency, i) => {
       const oscillator = this.context!.createOscillator(), gain = this.context!.createGain();
       const time = this.context!.currentTime + i * step;
-      oscillator.type = sound === 'death' ? 'sawtooth' : 'sine'; oscillator.frequency.value = frequency;
+      oscillator.type = sound === 'death' ? 'sawtooth' : sound === 'record' ? 'triangle' : 'sine'; oscillator.frequency.value = frequency;
       gain.gain.setValueAtTime(0, time); gain.gain.linearRampToValueAtTime(sound === 'dot' ? .18 : .35, time + .007);
       gain.gain.exponentialRampToValueAtTime(.001, time + step * 1.8);
       oscillator.connect(gain); gain.connect(this.master!); oscillator.start(time); oscillator.stop(time + step * 2);

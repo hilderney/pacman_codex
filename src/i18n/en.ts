@@ -1,4 +1,4 @@
-// All product copy lives here; replace this dictionary to add a locale.
+// All product copy lives here; add locales in sibling files and wire them in index.ts.
 export const en = {
   title: 'Neon Maze', arcade: 'THE AFTER HOURS ARCADE', edition: 'VOLUME 01 / INFINITE MAZES',
   play: 'Play', ranking: 'Leaderboard', settings: 'Settings', guest: 'Play as guest', google: 'Sign in with Google',
@@ -11,7 +11,7 @@ export const en = {
   howPower: 'Turn the tables', howPowerBody: 'Grab an energy orb. For a few seconds, the echoes run from you.',
   howClear: 'Leave nothing behind', howClearBody: 'Collect every spark to unlock a brand-new maze.',
   howSurvive: 'Your points keep you alive', howSurviveBody: 'No life limit. Death costs 10, then 20, then 40 points. Reach zero on a death and the run ends.',
-  yourRun: 'YOUR RUN', localBest: 'DEVICE BEST', score: 'BALANCE', level: 'SCREEN', deaths: 'DEATHS', cleared: 'CLEARED',
+  yourRun: 'YOUR RUN', localBest: 'DEVICE BEST', currentRun: 'CURRENT RUN', bestStrike: 'YOUR BEST STRIKE', score: 'BALANCE', level: 'SCREEN', deaths: 'DEATHS', cleared: 'CLEARED',
   peak: 'PEAK', nextPenalty: 'NEXT DEATH', speed: 'SPEED', finalBalance: 'FINAL BALANCE',
   echoes: 'MEET THE ECHOES', personalities: ['Trace', 'Veil', 'Flux', 'Drift'],
   traits: ['Always on your trail', 'Waiting at your next turn', 'Closing in from the side', 'Unpredictably shy'],
@@ -49,4 +49,5 @@ export const en = {
   update: 'An update is ready. It will install after you close the game.',
   storageWarning: 'Device storage is unavailable. Records and settings will last only for this visit.',
   syncRejected: 'This run could not be submitted. Your device record is safe.',
+  localeLabel: 'Language',
 };

@@ -2,7 +2,7 @@ import { generateMaze, neighbor } from './maze';
 import { chooseDirection, personalityTarget } from './pathfinding';
 import { key, random, same, type Direction, type Maze, type Point } from './types';
 
-export type SoundEvent = 'dot' | 'power' | 'ghost' | 'death' | 'start' | 'fruit';
+export type SoundEvent = 'dot' | 'power' | 'ghost' | 'death' | 'start' | 'fruit' | 'record';
 export type Phase = 'ready' | 'playing' | 'dying' | 'level-clear' | 'over';
 export interface Actor { pos: Point; next: Point | null; progress: number; dir: Direction }
 export interface Ghost extends Actor { id: number; mode: 'normal' | 'frightened' | 'eyes' | 'leaving'; release: number }
@@ -30,6 +30,9 @@ export class Game {
   rng: () => number;
   runId: string;
   onSound: (sound: SoundEvent) => void = () => {};
+  // Called at meaningful run checkpoints so the client can sync the current
+  // best result without sending a request for every collected point.
+  onProgress: (result: RunResult) => void = () => {};
   onOver: (result: RunResult) => void = () => {};
 
   constructor(public seed = Date.now() >>> 0, runId = crypto.randomUUID()) {
@@ -39,6 +42,10 @@ export class Game {
   get scatter() { return this.cycleTime % 27 < 7; }
   get nextPenalty() { return deathPenalty(this.deaths + 1); }
   get remaining() { return this.maze.dots.size + this.maze.powers.size; }
+  snapshot(): RunResult {
+    return { score: this.peakScore, level: this.level, durationMs: Math.floor(this.elapsed * 1000), runId: this.runId,
+      balance: this.score, deaths: this.deaths, cleared: this.cleared };
+  }
   input(direction: Direction) { this.queued = direction; }
   togglePause() { if (this.phase !== 'over') this.paused = !this.paused; }
 
@@ -66,8 +73,7 @@ export class Game {
       if (this.phase === 'dying') {
         if (this.score <= 0) {
           this.phase = 'over';
-          this.onOver({ score: this.peakScore, level: this.level, durationMs: Math.floor(this.elapsed * 1000), runId: this.runId,
-            balance: this.score, deaths: this.deaths, cleared: this.cleared });
+          this.onOver(this.snapshot());
           return;
         }
         this.resetActors(); this.phase = 'ready'; return;
@@ -108,7 +114,9 @@ export class Game {
       });
     }
     if (this.collisions()) return;
-    if (this.remaining === 0) { this.cleared++; this.phase = 'level-clear'; this.phaseTime = 1.8; }
+    if (this.remaining === 0) {
+      this.cleared++; this.phase = 'level-clear'; this.phaseTime = 1.8; this.onProgress(this.snapshot());
+    }
   }
 
   private move(entity: Actor, speed: number, dt: number, decide: () => Direction | null,
@@ -160,7 +168,7 @@ export class Game {
         this.deaths++;
         this.lastPenalty = Math.min(this.score, deathPenalty(this.deaths));
         this.score = Math.max(0, this.score - this.lastPenalty);
-        this.phase = 'dying'; this.phaseTime = 1.3; this.onSound('death'); return true;
+        this.phase = 'dying'; this.phaseTime = 1.3; this.onSound('death'); this.onProgress(this.snapshot()); return true;
       }
     }
     return false;

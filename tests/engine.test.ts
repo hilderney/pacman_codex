@@ -37,7 +37,7 @@ describe('simulation', () => {
     tick(g, .02); expect(ghost.mode).toBe('leaving'); expect(ghost.release).toBeGreaterThan(0);
   });
   it('deducts 10, 20, 40, 80 across deaths and ends only when the balance reaches zero', () => {
-    const g = playing(), over = vi.fn(); g.onOver = over;
+    const g = playing(), over = vi.fn(), progress = vi.fn(); g.onOver = over; g.onProgress = progress;
     g.score = g.peakScore = 100;
     for (const [index, balance] of [90, 70, 30, 0].entries()) {
       g.phase = 'playing'; g.maze.dots.delete(key(g.player.pos));
@@ -49,6 +49,7 @@ describe('simulation', () => {
     }
     expect(g.phase).toBe('over'); tick(g, 10); expect(over).toHaveBeenCalledOnce();
     expect(over.mock.calls[0][0]).toMatchObject({ score: 100, balance: 0, deaths: 4 });
+    expect(progress).toHaveBeenCalledTimes(4);
     expect(g.nextPenalty).toBe(160);
   });
   it('starts at zero safely, but a death at zero is terminal; a new run resets all counters', () => {
@@ -66,8 +67,8 @@ describe('simulation', () => {
     tick(g, .02); expect(g.score).toBe(100); expect(g.peakScore).toBe(110);
   });
   it('clears a maze and uses a deterministic different seed for the next level', () => {
-    const g = playing(), seed = g.maze.seed; g.maze.dots.clear(); g.maze.powers.clear(); g.deaths = 5; g.score = 300;
-    tick(g, .02); expect(g.phase).toBe('level-clear'); expect(g.cleared).toBe(1); tick(g, 2);
+    const g = playing(), progress = vi.fn(), seed = g.maze.seed; g.onProgress = progress; g.maze.dots.clear(); g.maze.powers.clear(); g.deaths = 5; g.score = 300;
+    tick(g, .02); expect(g.phase).toBe('level-clear'); expect(g.cleared).toBe(1); expect(progress).toHaveBeenCalledOnce(); tick(g, 2);
     expect(g.level).toBe(2); expect(g.maze.seed).not.toBe(seed); expect(g.remaining).toBeGreaterThan(100);
     expect(g.deaths).toBe(5); expect(g.nextPenalty).toBe(320); expect(g.score).toBe(300); expect(g.cleared).toBe(1);
   });
