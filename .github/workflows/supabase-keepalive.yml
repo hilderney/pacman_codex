@@ -13,7 +13,7 @@ jobs:
       - name: Read one leaderboard row (no writes or service role)
         env:
           SUPABASE_URL: ${{ secrets.VITE_SUPABASE_URL }}
-          SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_ANON_KEY }}
+          SUPABASE_ANON_KEY: ${{ secrets.VITE_SUPABASE_PUB_KEY || secrets.VITE_SUPABASE_ANON_KEY }}
         run: |
           test -n "$SUPABASE_URL" && test -n "$SUPABASE_ANON_KEY"
           curl --fail --silent --show-error --retry 2 --max-time 20 \

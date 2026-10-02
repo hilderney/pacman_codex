@@ -6,8 +6,12 @@ export type SoundEvent = 'dot' | 'power' | 'ghost' | 'death' | 'start' | 'fruit'
 export type Phase = 'ready' | 'playing' | 'dying' | 'level-clear' | 'over';
 export interface Actor { pos: Point; next: Point | null; progress: number; dir: Direction }
 export interface Ghost extends Actor { id: number; mode: 'normal' | 'frightened' | 'eyes' | 'leaving'; release: number }
-export interface RunResult { score: number; level: number; durationMs: number; runId: string }
-export const playerSpeed = (level: number) => Math.min(8.2, 5.8 + (level - 1) * .18);
+// Submitted score is the highest balance reached, not the final zero balance.
+export interface RunResult { score: number; level: number; durationMs: number; runId: string; deaths?: number; cleared?: number; balance?: number }
+// Linear, not compounded: exactly 1x at screen 1, 2x at screen 100.
+export const speedMultiplier = (level: number) => 1 + (Math.max(1, level) - 1) / 99;
+export const playerSpeed = (level: number) => 5.8 * speedMultiplier(level);
+export const deathPenalty = (death: number) => Math.min(Number.MAX_SAFE_INTEGER, 10 * 2 ** Math.min(50, Math.max(0, death - 1)));
 const actor = (pos: Point): Actor => ({ pos: { ...pos }, next: null, progress: 0, dir: 'left' });
 
 /** Pure simulation, with no DOM, audio, storage or network dependencies.
@@ -18,7 +22,7 @@ export class Game {
   ghosts: Ghost[] = [];
   phase: Phase = 'ready';
   paused = false;
-  score = 0; level = 1; lives = 3;
+  score = 0; peakScore = 0; level = 1; deaths = 0; cleared = 0; lastPenalty = 0;
   elapsed = 0; phaseTime = 1.8; frightened = 0; cycleTime = 0; levelTime = 0;
   combo = 0; collected = 0; fruit: { pos: Point; time: number } | null = null;
   fruitMilestones = new Set<number>();
@@ -32,7 +36,8 @@ export class Game {
     this.runId = runId; this.rng = random(seed); this.maze = generateMaze(seed); this.player = actor(this.maze.spawn);
     this.resetActors();
   }
-  get scatter() { return this.cycleTime % 27 < Math.max(3, 7 - (this.level - 1) * .5); }
+  get scatter() { return this.cycleTime % 27 < 7; }
+  get nextPenalty() { return deathPenalty(this.deaths + 1); }
   get remaining() { return this.maze.dots.size + this.maze.powers.size; }
   input(direction: Direction) { this.queued = direction; }
   togglePause() { if (this.phase !== 'over') this.paused = !this.paused; }
@@ -46,14 +51,23 @@ export class Game {
   }
 
   update(dt: number) {
+    if (!Number.isFinite(dt) || dt <= 0 || this.paused || this.phase === 'over') return;
+    // Subdivide high-speed movement to preserve turns, pickups and collisions
+    // at arbitrarily late screens, without imposing a speed/level ceiling.
+    const steps = Math.max(1, Math.ceil(dt * 11 * speedMultiplier(this.level) / .2));
+    for (let i = 0; i < steps; i++) this.step(dt / steps);
+  }
+
+  private step(dt: number) {
     if (this.paused || this.phase === 'over') return;
     if (this.phase !== 'playing') {
       this.phaseTime -= dt;
       if (this.phaseTime > 0) return;
       if (this.phase === 'dying') {
-        if (this.lives <= 0) {
+        if (this.score <= 0) {
           this.phase = 'over';
-          this.onOver({ score: this.score, level: this.level, durationMs: Math.floor(this.elapsed * 1000), runId: this.runId });
+          this.onOver({ score: this.peakScore, level: this.level, durationMs: Math.floor(this.elapsed * 1000), runId: this.runId,
+            balance: this.score, deaths: this.deaths, cleared: this.cleared });
           return;
         }
         this.resetActors(); this.phase = 'ready'; return;
@@ -80,7 +94,7 @@ export class Game {
     for (const ghost of this.ghosts) {
       ghost.release -= dt;
       if (ghost.release > 0) continue;
-      const speed = ghost.mode === 'eyes' ? 11 : ghost.mode === 'frightened' ? 3.2 : playerSpeed(this.level) * (.82 + ghost.id * .025);
+      const speed = (ghost.mode === 'eyes' ? 11 : ghost.mode === 'frightened' ? 3.2 : 5.8 * (.82 + ghost.id * .025)) * speedMultiplier(this.level);
       this.move(ghost, speed, dt, () => {
         const target = ghost.mode === 'eyes' ? this.maze.house : ghost.mode === 'leaving'
           ? { x: ghost.id % 2 ? 16 : 11, y: 16 }
@@ -94,7 +108,7 @@ export class Game {
       });
     }
     if (this.collisions()) return;
-    if (this.remaining === 0) { this.phase = 'level-clear'; this.phaseTime = 1.8; }
+    if (this.remaining === 0) { this.cleared++; this.phase = 'level-clear'; this.phaseTime = 1.8; }
   }
 
   private move(entity: Actor, speed: number, dt: number, decide: () => Direction | null,
@@ -114,9 +128,9 @@ export class Game {
 
   private collect() {
     const k = key(this.player.pos);
-    if (this.maze.dots.delete(k)) { this.score += 10; this.collected++; this.onSound('dot'); }
+    if (this.maze.dots.delete(k)) { this.addScore(10); this.collected++; this.onSound('dot'); }
     if (this.maze.powers.delete(k)) {
-      this.score += 50; this.collected++; this.frightened = Math.max(3, 7 - this.level * .25); this.combo = 0;
+      this.addScore(50); this.collected++; this.frightened = 7; this.combo = 0;
       for (const g of this.ghosts) if (g.mode === 'normal' || g.mode === 'frightened') g.mode = 'frightened';
       this.onSound('power');
     }
@@ -124,8 +138,13 @@ export class Game {
       this.fruitMilestones.add(milestone); this.fruit = { pos: this.maze.spawn, time: 12 };
     }
     if (this.fruit && same(this.player.pos, this.fruit.pos)) {
-      this.score += Math.min(1000, 100 * this.level); this.fruit = null; this.onSound('fruit');
+      this.addScore(Math.min(1000, 100 * this.level)); this.fruit = null; this.onSound('fruit');
     }
+  }
+
+  private addScore(points: number) {
+    this.score += points;
+    this.peakScore = Math.max(this.peakScore, this.score);
   }
 
   private collisions(): boolean {
@@ -136,9 +155,12 @@ export class Game {
       const rawX = Math.abs(p.x - g.x), dx = Math.min(rawX, this.maze.width - rawX);
       if (Math.hypot(dx, p.y - g.y) > .68) continue;
       if (ghost.mode === 'frightened') {
-        ghost.mode = 'eyes'; this.score += 200 * 2 ** Math.min(this.combo++, 3); this.onSound('ghost');
+        ghost.mode = 'eyes'; this.addScore(200 * 2 ** Math.min(this.combo++, 3)); this.onSound('ghost');
       } else {
-        this.lives--; this.phase = 'dying'; this.phaseTime = 1.3; this.onSound('death'); return true;
+        this.deaths++;
+        this.lastPenalty = Math.min(this.score, deathPenalty(this.deaths));
+        this.score = Math.max(0, this.score - this.lastPenalty);
+        this.phase = 'dying'; this.phaseTime = 1.3; this.onSound('death'); return true;
       }
     }
     return false;

@@ -20,7 +20,10 @@ export class Network {
   onChange: () => void = () => {};
   private flushing: Promise<'none' | 'pending' | 'synced' | 'rejected'> | null = null;
   constructor() {
-    const url = import.meta.env.VITE_SUPABASE_URL, token = import.meta.env.VITE_SUPABASE_ANON_KEY;
+    const url = import.meta.env.VITE_SUPABASE_URL;
+    // Supabase now labels the browser-safe key as "publishable". Keep the
+    // legacy anon name as a fallback so existing deployments keep working.
+    const token = import.meta.env.VITE_SUPABASE_PUB_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY;
     if (url && /^https:\/\/[a-z0-9-]+\.supabase\.co\/?$/.test(url) && token && !token.includes('YOUR_')) {
       this.client = createClient(url, token, {
         auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: 'pkce', storage: safeStorage },

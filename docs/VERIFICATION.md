@@ -1,5 +1,19 @@
 # Verificação da entrega
 
+## Revisão das regras — 2 de outubro de 2026
+
+- **37 testes Vitest passaram**, além de TypeScript e build PWA.
+- **1.200 seeds** passam pelas regras novas: toda parede interna toca um caminho; componentes de parede, incluindo curvas/ramificações e a casa, têm no máximo 8 tiles; nenhum beco nem região ligada por uma ponte; simetria, túneis, conectividade, pickups e ausência de caminhos 2×2 preservados.
+- Casos específicos reproduzem os três problemas marcados na imagem: massa de parede, parede em L longa e volta com uma única entrada.
+- Simulação: penalidades 10/20/40/80, sobrevivência além de três mortes, Game Over somente ao zerar em uma morte, preservação do pico, reinício de contadores, mortes mantidas entre telas, contador de telas vencidas e avanço além de 999.
+- Velocidade: curva linear, 2× na tela 100, continuação sem teto artificial e coleta/colisões corretas em velocidades altas por subpassos adaptativos.
+- A migration `002_endless_runs.sql` foi aplicada sobre `001` no PostgreSQL embarcado dos testes; remove os antigos tetos de 999 telas/sete dias e ajusta os limites de duração à velocidade. Nenhuma migration foi aplicada a um Supabase remoto.
+- Build de produção atualizado e nova interface conferida no navegador. A PWA antiga foi substituída no cache da prévia.
+- Partida no navegador encerrou com saldo zero, três mortes e pico de 50; voltar ao início reiniciou os contadores e a próxima penalidade em 10. Console sem erros. Evidência visual em `maze-rules-v2.png`.
+- Interpretações adotadas: vizinhança pelos quatro lados; moldura externa isenta dos limites de paredes; recorde/ranking usam o maior saldo da partida, porque seu saldo final é zero.
+
+## Verificação inicial — 1 de outubro de 2026
+
 Verificado localmente em 1 de outubro de 2026.
 
 - TypeScript: `tsc --noEmit` passou.

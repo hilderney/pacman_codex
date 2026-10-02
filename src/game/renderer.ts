@@ -22,7 +22,7 @@ export class Renderer {
     for (let y = 0; y < maze.height; y++) for (let x = 0; x < maze.width; x++) {
       const tile = maze.tiles[y][x], px = x * TILE, py = y * TILE;
       if (tile === Tile.Wall) {
-        ctx.fillStyle = '#0d1c27'; ctx.fillRect(px, py, TILE, TILE);
+        ctx.shadowBlur = 0; ctx.fillStyle = '#0d1c27'; ctx.fillRect(px, py, TILE, TILE); ctx.shadowBlur = 4;
         const floor = (nx: number, ny: number) => maze.tiles[ny]?.[nx] !== undefined && maze.tiles[ny][nx] !== Tile.Wall;
         ctx.beginPath();
         if (floor(x, y - 1)) { ctx.moveTo(px + 1, py + 3); ctx.lineTo(px + 19, py + 3); }
@@ -71,7 +71,7 @@ export class Renderer {
       ctx.fillRect(-4, -2, 2.5, 3); ctx.fillRect(1.5, -2, 2.5, 3); ctx.restore();
     }
     if (!attract && game.phase !== 'playing' && game.phase !== 'over') {
-      this.banner(game.phase === 'ready' ? en.ready : game.phase === 'level-clear' ? en.clear : en.caught);
+      this.banner(game.phase === 'ready' ? en.ready : game.phase === 'level-clear' ? en.clear : `${en.caught}  −${game.lastPenalty.toLocaleString('en-US')}`);
     }
   }
   private player(p: Point, direction: string, time: number, scale: number) {

@@ -17,6 +17,7 @@ beforeAll(async () => {
     grant usage on schema public, auth to anon, authenticated; grant execute on function auth.uid() to anon, authenticated;
     insert into auth.users values ('${alice}'),('${bob}');`);
   await db.exec(readFileSync(new URL('../supabase/migrations/001_neon_maze.sql', import.meta.url), 'utf8'));
+  await db.exec(readFileSync(new URL('../supabase/migrations/002_endless_runs.sql', import.meta.url), 'utf8'));
 }, 60000);
 afterAll(async () => { await db.close(); });
 describe.sequential('database RLS and RPC', () => {
@@ -52,7 +53,7 @@ describe.sequential('database RLS and RPC', () => {
     await submit(100, 1, 30000, run); await submit(100, 1, 30000, run);
     await submit(200, 2); await submit(50, 3);
     const result = await db.query<{ best_score: number; level_reached: number }>('select * from public.scores');
-    expect(result.rows).toHaveLength(1); expect(result.rows[0].best_score).toBe(200); expect(result.rows[0].level_reached).toBe(2);
+    expect(result.rows).toHaveLength(1); expect(Number(result.rows[0].best_score)).toBe(200); expect(Number(result.rows[0].level_reached)).toBe(2);
   });
   it('limits new submissions to five per rolling minute, separately per user', async () => {
     await submit(210); await submit(220);
@@ -60,5 +61,15 @@ describe.sequential('database RLS and RPC', () => {
     await asUser(bob); await submit(300);
     await asUser('', 'anon'); const result = await db.query<{ user_id: string }>('select * from public.scores order by best_score desc');
     expect(result.rows).toHaveLength(2); expect(result.rows[0].user_id).toBe(bob);
+  });
+  it('accepts screens above 999 and applies speed-adjusted duration bounds', async () => {
+    await asUser(bob);
+    await submit(10000, 1000, 900000);
+    const result = await db.query<{ level_reached: string; best_score: string }>('select * from public.scores where user_id = $1', [bob]);
+    expect(Number(result.rows[0].level_reached)).toBe(1000);
+    expect(Number(result.rows[0].best_score)).toBe(10000);
+    // On screen 100, 2x movement makes a 500,000 score / 420s run plausible.
+    await submit(500000, 100, 420000);
+    await expect(submit(500000, 100, 100000)).rejects.toThrow(/Implausible/);
   });
 });

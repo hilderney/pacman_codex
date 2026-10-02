@@ -1,6 +1,6 @@
 import './style.css';
 import { registerSW } from 'virtual:pwa-register';
-import { Game, type RunResult } from './game/engine';
+import { Game, speedMultiplier, type RunResult } from './game/engine';
 import { Renderer, COLORS } from './game/renderer';
 import { DIRECTIONS, type Direction } from './game/types';
 import { en as t } from './i18n/en';
@@ -38,7 +38,8 @@ app.innerHTML = `
   <main class="arcade">
     <section class="intro" id="intro"></section>
     <section class="cabinet" aria-label="${t.board}">
-      <div class="hud"><div><span>${t.score}</span><strong id="score">000000</strong></div><div class="hud-level"><span>${t.level}</span><strong id="level">01</strong></div><div class="hud-lives"><span>${t.lives}</span><strong id="lives">◆ ◆ ◆</strong></div></div>
+      <div class="hud"><div><span>${t.score}</span><strong id="score">000000</strong></div><div class="hud-level"><span>${t.level}</span><strong id="level">01</strong></div><div class="hud-level"><span>${t.cleared}</span><strong id="cleared">0</strong></div><div class="hud-deaths"><span>${t.deaths}</span><strong id="deaths">0</strong></div></div>
+      <div class="run-stats"><span>${t.peak} <b id="peak">0</b></span><span>${t.nextPenalty} <b id="penalty">−10</b></span><span>${t.speed} <b id="speed">1.00×</b></span></div>
       <div class="board-wrap"><canvas id="maze" tabindex="0" aria-label="${t.mazeLabel}"></canvas><div class="pause-cover" id="pause-cover" hidden><span class="eyebrow">${t.pause.toUpperCase()}</span><h2>${t.paused}</h2><p>${t.pausedBody}</p><button class="primary" data-action="pause">${svg('play')}${t.resume}</button></div></div>
       <div class="cabinet-bottom"><span><i class="status-dot"></i><span id="mode">${t.board}</span></span><span id="board-seed"></span><button class="icon-button" id="pause-button" data-action="pause" aria-label="${t.pause}" hidden>${svg('pause')}</button></div>
     </section>
@@ -68,12 +69,12 @@ function homeIntro() {
       ${network.session ? '' : `<button class="secondary" data-action="google"><span class="google-mark">G</span>${t.google}</button>`}
       <small>${t.guestHint}</small></div>
     <div class="instructions"><h2 class="eyebrow">${t.how}</h2>${[
-      [t.howMove, t.howMoveBody], [t.howPower, t.howPowerBody], [t.howClear, t.howClearBody],
+      [t.howMove, t.howMoveBody], [t.howPower, t.howPowerBody], [t.howClear, t.howClearBody], [t.howSurvive, t.howSurviveBody],
     ].map(([title, body], i) => `<div class="instruction"><span>0${i + 1}</span><div><h3>${title}</h3><p>${body}</p></div></div>`).join('')}</div>`;
 }
 function gameIntro() {
   $('#intro').innerHTML = `<span class="eyebrow accent"><i class="status-dot"></i>${owner && network.nickname ? escape(network.nickname) : t.guest}</span>
-    <h1>${t.headlineA}<br/><em>${t.headlineB}</em></h1><p class="intro-copy">${t.howClearBody}</p>
+    <h1>${t.headlineA}<br/><em>${t.headlineB}</em></h1><p class="intro-copy">${t.howSurviveBody}</p>
     <div class="play-controls"><button class="secondary" data-action="pause">${svg('pause')}${t.pause} / ${t.resume}</button><button class="text-button" data-action="home">${t.exit}${svg('arrow')}</button></div>
     <div class="instructions"><h2 class="eyebrow">${t.controls}</h2><div class="key-cluster"><kbd>↑</kbd><div><kbd>←</kbd><kbd>↓</kbd><kbd>→</kbd></div></div><p>${t.howMoveBody}</p><span class="micro">${t.pauseHint}</span></div>`;
 }
@@ -123,6 +124,7 @@ async function onOver(result: RunResult) {
   queueRun(owner, result);
   $('#intro').innerHTML = `<span class="eyebrow accent">${t.over}</span><h1>${t.lights}<br/><em>${t.out}</em></h1><p class="intro-copy">${t.overBody}</p>
     <div class="final-scores"><div><span class="micro">${t.finalScore}</span><strong>${format(result.score)}</strong></div><div><span class="micro">${t.record}</span><strong>${format(best)}</strong></div></div>
+    <p class="run-summary">${t.finalBalance}: ${format(result.balance ?? 0)}<br/>${t.deaths}: ${result.deaths ?? 0} · ${t.cleared}: ${result.cleared ?? 0}</p>
     <p class="sync-status" id="sync-status">${owner ? t.pending : t.localOnly}</p><button class="primary" data-action="again">${svg('play')}${t.again}${svg('arrow')}</button><button class="text-button" data-action="ranking">${t.ranking}${svg('arrow')}</button><button class="text-button" data-action="home">${t.menu}</button>`;
   if (owner) {
     const state = await network.flush();
@@ -232,7 +234,9 @@ function frame(now: number) {
   sound.background(screen === 'game' && !game.paused && game.phase === 'playing', game.elapsed, game.frightened > 0);
   if (now - lastHud > 100) {
     lastHud = now; $('#score').textContent = String(game.score).padStart(6, '0'); $('#level').textContent = String(game.level).padStart(2, '0');
-    $('#lives').textContent = Array(game.lives).fill('◆').join(' ') || '—';
+    $('#deaths').textContent = String(game.deaths); $('#cleared').textContent = String(game.cleared);
+    $('#peak').textContent = format(game.peakScore); $('#penalty').textContent = `−${format(game.nextPenalty)}`;
+    $('#speed').textContent = `${speedMultiplier(game.level).toFixed(2)}×`;
     $('#board-seed').textContent = `${t.seed} ${game.maze.seed.toString(16).toUpperCase().slice(-6)}`;
     $('#mode').textContent = screen === 'home' ? t.board : game.frightened > 0 ? t.phaseModes.frightened : game.scatter ? t.phaseModes.scatter : t.phaseModes.chase;
     if (dialog.dataset.kind === 'settings') $('#gamepad-status').textContent = connected ? t.gamepadConnected : t.gamepadMissing;
