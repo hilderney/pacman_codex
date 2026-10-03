@@ -1,4 +1,5 @@
 import { describe, expect, it } from 'vitest';
+import { achievementThreshold } from '../src/achievements/config';
 import { AchievementTracker } from '../src/achievements/tracker';
 import type { AchievementEvent, AchievementKind } from '../src/game/engine';
 
@@ -10,9 +11,10 @@ const event = (runId: string, sequence: number, kind: AchievementKind, changes: 
 describe('immediate achievement feedback', () => {
   it('unlocks run achievements at the exact event and never repeats them', () => {
     const tracker = new AchievementTracker(), run = crypto.randomUUID();
+    const sparkPeak = achievementThreshold('spark_starter').peak ?? 500000;
     expect(tracker.consume(event(run, 1, 'clear', { cleared: 1 }))).toEqual(['ace_spirit']);
     expect(tracker.consume(event(run, 2, 'clear', { level: 2, cleared: 2 }))).toEqual([]);
-    expect(tracker.consume(event(run, 3, 'peak', { level: 3, cleared: 2, peak: 1000, balance: 1000 }))).toEqual(['spark_starter']);
+    expect(tracker.consume(event(run, 3, 'peak', { level: 3, cleared: 2, peak: sparkPeak, balance: sparkPeak }))).toEqual(['spark_starter']);
   });
 
   it('unlocks all Phantom tiers in one energy window', () => {
