@@ -41,16 +41,31 @@ test('the production service worker supports offline reload and a playable run',
   await expect(page.getByText('Take a breath.')).toBeVisible();
 });
 
-test('mobile viewport has no horizontal overflow and accepts touch swipes', async ({ page, context }) => {
+test('mobile viewport has no horizontal overflow and uses a repositionable touch joystick', async ({ page, context }) => {
   await page.setViewportSize({ width: 390, height: 844 });
+  const touch = await context.newCDPSession(page);
+  await touch.send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 1 });
   await page.goto('/');
   await page.getByRole('button', { name: 'Play as guest', exact: true }).click();
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(true);
+  await expect(page.locator('body')).toHaveClass(/game-focus/);
+  const layout = await page.evaluate(() => ({
+    fits: document.documentElement.scrollWidth <= innerWidth,
+    viewport: innerWidth,
+    page: document.documentElement.scrollWidth,
+    offenders: [...document.querySelectorAll<HTMLElement>('body *')]
+      .map(element => ({ selector: element.id ? `#${element.id}` : element.className, right: element.getBoundingClientRect().right }))
+      .filter(item => item.right > innerWidth + 0.5)
+      .sort((a, b) => b.right - a.right)
+      .slice(0, 5),
+  }));
+  expect(layout.fits, JSON.stringify(layout)).toBe(true);
   const canvas = page.locator('#maze'), box = (await canvas.boundingBox())!;
-  const touch = await context.newCDPSession(page), x = box.x + box.width / 2, y = box.y + box.height / 2;
+  const x = box.x + box.width / 2, y = box.y + box.height / 2;
   await touch.send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x, y }] });
   await touch.send('Input.dispatchTouchEvent', { type: 'touchMove', touchPoints: [{ x, y: y - 50 }] });
+  await expect(page.locator('#touch-stick')).toBeVisible();
   await touch.send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+  await expect(page.locator('#touch-stick')).toBeHidden();
   await expect(page.locator('body')).toHaveAttribute('data-screen', 'game');
   await page.screenshot({ path: 'test-results/mobile.png', fullPage: true });
 });

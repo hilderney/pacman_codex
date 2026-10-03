@@ -1,0 +1,12 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "neon-maze",
+  "compatibility_date": "2026-10-02",
+  // Static Vite build. Cloudflare Previews upload this directory.
+  "assets": {
+    "directory": "./dist",
+    "not_found_handling": "single-page-application"
+  },
+  // Required by `npx wrangler preview` (can stay empty for this SPA).
+  "previews": {}
+}

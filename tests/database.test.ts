@@ -18,6 +18,7 @@ beforeAll(async () => {
     insert into auth.users values ('${alice}'),('${bob}');`);
   await db.exec(readFileSync(new URL('../supabase/migrations/001_neon_maze.sql', import.meta.url), 'utf8'));
   await db.exec(readFileSync(new URL('../supabase/migrations/002_endless_runs.sql', import.meta.url), 'utf8'));
+  await db.exec(readFileSync(new URL('../supabase/migrations/003_achievements.sql', import.meta.url), 'utf8'));
 }, 60000);
 afterAll(async () => { await db.close(); });
 describe.sequential('database RLS and RPC', () => {

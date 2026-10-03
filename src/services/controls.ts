@@ -2,18 +2,30 @@ import { DragGesture } from '@use-gesture/vanilla';
 import type { Direction } from '../game/types';
 import type { Settings } from './storage';
 
+export interface JoystickState { active: boolean; x: number; y: number; dx: number; dy: number }
+export function directionFromMovement(x: number, y: number, deadZone = 14): Direction | null {
+  if (Math.hypot(x, y) < deadZone) return null;
+  return Math.abs(x) > Math.abs(y) ? x > 0 ? 'right' : 'left' : y > 0 ? 'down' : 'up';
+}
+
 export class Controls {
   private gesture: DragGesture;
   private startDown = false;
   capturing = false;
   constructor(private canvas: HTMLCanvasElement, public settings: Settings,
     private direction: (direction: Direction) => void, private pause: () => void,
-    private isPlaying: () => boolean) {
+    private isPlaying: () => boolean, private joystick: (state: JoystickState) => void = () => {}) {
     window.addEventListener('keydown', this.keydown);
-    this.gesture = new DragGesture(canvas, ({ movement: [x, y], last, tap }) => {
-      if (!this.isPlaying() || !last || tap || Math.hypot(x, y) < 16) return;
-      this.direction(Math.abs(x) > Math.abs(y) ? x > 0 ? 'right' : 'left' : y > 0 ? 'down' : 'up');
-    }, { eventOptions: { passive: false }, filterTaps: true });
+    this.gesture = new DragGesture(canvas, ({ movement: [x, y], xy: [clientX, clientY], first, last }) => {
+      if (!this.isPlaying()) { this.joystick({ active: false, x: 0, y: 0, dx: 0, dy: 0 }); return; }
+      const rect = canvas.getBoundingClientRect();
+      const centerX = clientX - rect.left - x, centerY = clientY - rect.top - y;
+      const distance = Math.hypot(x, y), scale = distance > 32 ? 32 / distance : 1;
+      this.joystick({ active: !last, x: centerX, y: centerY, dx: x * scale, dy: y * scale });
+      if (first || last) return;
+      const next = directionFromMovement(x, y);
+      if (next) this.direction(next);
+    }, { eventOptions: { passive: false }, filterTaps: true, pointer: { touch: true } });
   }
   private keydown = (event: KeyboardEvent) => {
     if (this.capturing || !this.isPlaying() || event.ctrlKey || event.metaKey || event.altKey ||
