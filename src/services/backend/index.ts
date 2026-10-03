@@ -6,10 +6,11 @@ export type BackendMode = 'local' | 'supabase' | 'none';
 
 export function resolveBackendMode(): BackendMode {
   const forced = String(import.meta.env.VITE_BACKEND ?? '').toLowerCase();
+  // Production bundles must never use mock Google / SQLite — only Supabase or offline guest.
+  if (import.meta.env.PROD) return supabaseConfigured() ? 'supabase' : 'none';
   if (forced === 'local') return 'local';
   if (forced === 'supabase') return supabaseConfigured() ? 'supabase' : 'none';
-  // Localhost default: prefer the in-browser SQLite + mock Google stack so
-  // accounts work without a remote project. Production builds keep Supabase.
+  // Vite dev server default: in-browser SQLite + mock Google accounts.
   if (import.meta.env.DEV) return 'local';
   return supabaseConfigured() ? 'supabase' : 'none';
 }
