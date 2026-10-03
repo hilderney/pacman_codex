@@ -1,6 +1,6 @@
 {
   "$schema": "./node_modules/wrangler/config-schema.json",
-  "name": "neon-maze",
+  "name": "neonmaze",
   "compatibility_date": "2026-10-02",
   // Static Vite build. Cloudflare Previews upload this directory.
   "assets": {
