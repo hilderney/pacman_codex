@@ -58,6 +58,7 @@ On the Codex Windows environment, if pnpm shims are missing, use `node node_modu
 | `supabase/migrations/002_endless_runs.sql` | Endless screens migration and speed-adjusted duration validation |
 | `supabase/migrations/003_achievements.sql` | 18 achievements, event RPC, exclusive ownership, RLS, and daily leader function |
 | `supabase/migrations/004_king_cron.sql` | Production Supabase Cron job for daily ranking snapshots |
+| `wrangler.jsonc` | Cloudflare assets + empty `previews` block for `wrangler preview` |
 | `.github/workflows/deploy.yml` | Tests, build, and Cloudflare Pages deploy |
 | `.github/workflows/supabase-keepalive.yml` | Weekly database read |
 
