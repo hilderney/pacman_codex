@@ -8,10 +8,14 @@ export class Renderer {
   private ctx: CanvasRenderingContext2D;
   private walls = document.createElement('canvas');
   private cachedMaze?: Game['maze'];
+  private scorePopups: { value: number; kind: 'power' | 'ghost' | 'fruit'; position: Point; born: number }[] = [];
   constructor(public canvas: HTMLCanvasElement) {
     this.ctx = canvas.getContext('2d')!;
     canvas.width = 560; canvas.height = 620;
     this.walls.width = canvas.width; this.walls.height = canvas.height;
+  }
+  showScorePopup(event: { value: number; kind: 'power' | 'ghost' | 'fruit'; position: Point }) {
+    this.scorePopups.push({ ...event, born: performance.now() / 1000 });
   }
   private cacheWalls(game: Game) {
     const ctx = this.walls.getContext('2d')!, maze = game.maze;
@@ -69,6 +73,18 @@ export class Renderer {
       }
       ctx.shadowBlur = 0; ctx.fillStyle = g.mode === 'eyes' ? '#eaffff' : '#122233';
       ctx.fillRect(-4, -2, 2.5, 3); ctx.fillRect(1.5, -2, 2.5, 3); ctx.restore();
+    }
+    const now = performance.now() / 1000;
+    this.scorePopups = this.scorePopups.filter(popup => now - popup.born < 1);
+    for (const popup of this.scorePopups) {
+      const age = now - popup.born;
+      const alpha = Math.max(0, 1 - age);
+      const rise = age * 30;
+      ctx.save(); ctx.globalAlpha = alpha; ctx.textAlign = 'center'; ctx.font = '700 12px monospace';
+      ctx.fillStyle = popup.kind === 'ghost' ? '#8eb8ff' : popup.kind === 'fruit' ? '#e4aaff' : '#c5ffd9';
+      ctx.shadowColor = ctx.fillStyle; ctx.shadowBlur = 8;
+      ctx.fillText(`+${popup.value.toLocaleString(numberLocale)}`, popup.position.x * TILE + 10, popup.position.y * TILE - 4 - rise);
+      ctx.restore();
     }
     if (!attract && game.phase !== 'playing' && game.phase !== 'over') {
       this.banner(game.phase === 'ready' ? t.ready : game.phase === 'level-clear' ? t.clear : `${t.caught}  −${game.lastPenalty.toLocaleString(numberLocale)}`);

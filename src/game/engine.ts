@@ -2,12 +2,19 @@ import { generateMaze, neighbor } from './maze';
 import { chooseDirection, personalityTarget } from './pathfinding';
 import { key, random, same, type Direction, type Maze, type Point } from './types';
 
-export type SoundEvent = 'dot' | 'power' | 'ghost' | 'death' | 'start' | 'fruit' | 'record';
+export type SoundEvent = 'dot' | 'power' | 'ghost' | 'death' | 'start' | 'fruit' | 'record' | 'achievement' | 'sync';
 export type Phase = 'ready' | 'playing' | 'dying' | 'level-clear' | 'over';
 export interface Actor { pos: Point; next: Point | null; progress: number; dir: Direction }
 export interface Ghost extends Actor { id: number; mode: 'normal' | 'frightened' | 'eyes' | 'leaving'; release: number }
 // Submitted score is the highest balance reached, not the final zero balance.
 export interface RunResult { score: number; level: number; durationMs: number; runId: string; deaths?: number; cleared?: number; balance?: number }
+export type AchievementKind = 'clear' | 'death' | 'over' | 'power' | 'capture' | 'tunnel' | 'peak';
+export interface AchievementEvent {
+  runId: string; sequence: number; kind: AchievementKind; level: number; elapsedMs: number;
+  peak: number; balance: number; deaths: number; cleared: number; penalty: number;
+  powerId: number; ghostId: number | null;
+}
+export interface ScorePopupEvent { value: number; kind: 'power' | 'ghost' | 'fruit'; position: Point }
 // Linear, not compounded: exactly 1x at screen 1, 2x at screen 100.
 export const speedMultiplier = (level: number) => 1 + (Math.max(1, level) - 1) / 99;
 export const playerSpeed = (level: number) => 5.8 * speedMultiplier(level);
@@ -29,10 +36,13 @@ export class Game {
   queued: Direction = 'left';
   rng: () => number;
   runId: string;
+  achievementSequence = 0; powerId = 0;
   onSound: (sound: SoundEvent) => void = () => {};
   // Called at meaningful run checkpoints so the client can sync the current
   // best result without sending a request for every collected point.
   onProgress: (result: RunResult) => void = () => {};
+  onAchievement: (event: AchievementEvent) => void = () => {};
+  onScorePopup: (event: ScorePopupEvent) => void = () => {};
   onOver: (result: RunResult) => void = () => {};
 
   constructor(public seed = Date.now() >>> 0, runId = crypto.randomUUID()) {
@@ -45,6 +55,12 @@ export class Game {
   snapshot(): RunResult {
     return { score: this.peakScore, level: this.level, durationMs: Math.floor(this.elapsed * 1000), runId: this.runId,
       balance: this.score, deaths: this.deaths, cleared: this.cleared };
+  }
+  private emitAchievement(kind: AchievementKind, ghostId: number | null = null) {
+    this.onAchievement({ runId: this.runId, sequence: ++this.achievementSequence, kind,
+      level: this.level, elapsedMs: Math.floor(this.elapsed * 1000), peak: this.peakScore,
+      balance: this.score, deaths: this.deaths, cleared: this.cleared,
+      penalty: this.lastPenalty, powerId: this.powerId, ghostId });
   }
   input(direction: Direction) { this.queued = direction; }
   togglePause() { if (this.phase !== 'over') this.paused = !this.paused; }
@@ -73,6 +89,7 @@ export class Game {
       if (this.phase === 'dying') {
         if (this.score <= 0) {
           this.phase = 'over';
+          this.emitAchievement('over');
           this.onOver(this.snapshot());
           return;
         }
@@ -109,13 +126,15 @@ export class Game {
           ghost.mode === 'eyes' || ghost.mode === 'leaving', ghost.mode === 'frightened', this.rng);
       }, ghost.mode === 'eyes' || ghost.mode === 'leaving', () => {
         if (ghost.mode === 'eyes' && same(ghost.pos, this.maze.house)) {
-          ghost.mode = 'leaving'; ghost.release = 1.2;
-        } else if (ghost.mode === 'leaving' && (ghost.pos.x === 11 || ghost.pos.x === 16)) ghost.mode = 'normal';
+          ghost.mode = 'leaving'; ghost.release = .35;
+        } else if (ghost.mode === 'leaving' && (ghost.pos.x === 11 || ghost.pos.x === 16))
+          ghost.mode = this.frightened > 0 ? 'frightened' : 'normal';
       });
     }
     if (this.collisions()) return;
     if (this.remaining === 0) {
-      this.cleared++; this.phase = 'level-clear'; this.phaseTime = 1.8; this.onProgress(this.snapshot());
+      this.cleared++; this.phase = 'level-clear'; this.phaseTime = 1.8;
+      this.emitAchievement('clear'); this.onProgress(this.snapshot());
     }
   }
 
@@ -130,7 +149,10 @@ export class Game {
     }
     entity.progress += speed * dt;
     if (entity.progress >= 1) {
-      entity.pos = entity.next; entity.next = null; entity.progress -= 1; arrive();
+      const previousX = entity.pos.x;
+      entity.pos = entity.next; entity.next = null; entity.progress -= 1;
+      if (entity === this.player && Math.abs(previousX - entity.pos.x) > 1) this.emitAchievement('tunnel');
+      arrive();
     }
   }
 
@@ -138,21 +160,27 @@ export class Game {
     const k = key(this.player.pos);
     if (this.maze.dots.delete(k)) { this.addScore(10); this.collected++; this.onSound('dot'); }
     if (this.maze.powers.delete(k)) {
-      this.addScore(50); this.collected++; this.frightened = 7; this.combo = 0;
+      this.addScore(50); this.onScorePopup({ value: 50, kind: 'power', position: { ...this.player.pos } });
+      this.collected++; this.frightened = 14; this.combo = 0; this.powerId++;
       for (const g of this.ghosts) if (g.mode === 'normal' || g.mode === 'frightened') g.mode = 'frightened';
-      this.onSound('power');
+      this.onSound('power'); this.emitAchievement('power');
     }
     for (const milestone of [70, 170]) if (this.collected >= milestone && !this.fruitMilestones.has(milestone)) {
       this.fruitMilestones.add(milestone); this.fruit = { pos: this.maze.spawn, time: 12 };
     }
     if (this.fruit && same(this.player.pos, this.fruit.pos)) {
-      this.addScore(Math.min(1000, 100 * this.level)); this.fruit = null; this.onSound('fruit');
+      const value = Math.min(1000, 100 * this.level);
+      this.addScore(value); this.onScorePopup({ value, kind: 'fruit', position: { ...this.player.pos } });
+      this.fruit = null; this.onSound('fruit');
     }
   }
 
   private addScore(points: number) {
+    const previousPeak = this.peakScore;
     this.score += points;
     this.peakScore = Math.max(this.peakScore, this.score);
+    if ((previousPeak < 1000 && this.peakScore >= 1000) || (previousPeak < 100000 && this.peakScore >= 100000))
+      this.emitAchievement('peak');
   }
 
   private collisions(): boolean {
@@ -163,12 +191,14 @@ export class Game {
       const rawX = Math.abs(p.x - g.x), dx = Math.min(rawX, this.maze.width - rawX);
       if (Math.hypot(dx, p.y - g.y) > .68) continue;
       if (ghost.mode === 'frightened') {
-        ghost.mode = 'eyes'; this.addScore(200 * 2 ** Math.min(this.combo++, 3)); this.onSound('ghost');
+        ghost.mode = 'eyes'; const value = 200 * 2 ** Math.min(this.combo++, 3);
+        this.addScore(value); this.onScorePopup({ value, kind: 'ghost', position: { ...this.player.pos } }); this.onSound('ghost');
+        this.emitAchievement('capture', ghost.id);
       } else {
         this.deaths++;
         this.lastPenalty = Math.min(this.score, deathPenalty(this.deaths));
         this.score = Math.max(0, this.score - this.lastPenalty);
-        this.phase = 'dying'; this.phaseTime = 1.3; this.onSound('death'); this.onProgress(this.snapshot()); return true;
+        this.phase = 'dying'; this.phaseTime = 1.3; this.onSound('death'); this.emitAchievement('death'); this.onProgress(this.snapshot()); return true;
       }
     }
     return false;

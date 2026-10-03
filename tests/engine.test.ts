@@ -29,10 +29,13 @@ describe('simulation', () => {
     tick(g, 20); expect(JSON.stringify(g)).toBe(before);
   });
   it('frightens echoes, awards a capture, then returns eyes to the house', () => {
-    const g = playing(); const power = [...g.maze.powers][0].split(',').map(Number);
+    const g = playing(), popups: { value: number; kind: string }[] = []; g.onScorePopup = event => popups.push(event);
+    const power = [...g.maze.powers][0].split(',').map(Number);
     g.player.pos = { x: power[0], y: power[1] }; g.player.dir = 'up'; g.input('up');
     const ghost = g.ghosts[0]; ghost.pos = { ...g.player.pos }; ghost.mode = 'normal';
     tick(g, .02); expect(ghost.mode).toBe('eyes'); expect(g.score).toBe(250); expect(g.frightened).toBeGreaterThan(0);
+    expect(popups).toContainEqual(expect.objectContaining({ value: 50, kind: 'power' }));
+    expect(popups).toContainEqual(expect.objectContaining({ value: 200, kind: 'ghost' }));
     ghost.pos = { x: 12, y: 16 }; ghost.next = { ...g.maze.house }; ghost.progress = .99; ghost.release = 0;
     tick(g, .02); expect(ghost.mode).toBe('leaving'); expect(ghost.release).toBeGreaterThan(0);
   });
@@ -73,9 +76,11 @@ describe('simulation', () => {
     expect(g.deaths).toBe(5); expect(g.nextPenalty).toBe(320); expect(g.score).toBe(300); expect(g.cleared).toBe(1);
   });
   it('spawns only two timed fruits per level and awards a collected fruit', () => {
-    const g = playing(); g.collected = 70; tick(g, .02); expect(g.fruitMilestones.size).toBe(1);
+    const g = playing(), popups: { value: number; kind: string }[] = []; g.onScorePopup = event => popups.push(event);
+    g.collected = 70; tick(g, .02); expect(g.fruitMilestones.size).toBe(1);
     // First fruit was collected immediately at the spawn.
     expect(g.score).toBeGreaterThanOrEqual(100); g.player.pos = { x: 1, y: 1 }; g.player.dir = 'up'; g.input('up');
+    expect(popups.some(popup => popup.kind === 'fruit')).toBe(true);
     g.collected = 170; tick(g, .02); expect(g.fruit).not.toBeNull(); tick(g, 13);
     expect(g.fruit).toBeNull(); expect(g.fruitMilestones.size).toBe(2);
   });
@@ -111,5 +116,21 @@ describe('simulation', () => {
     const chase = playing(); chase.level = 10000; chase.score = 100; chase.player.pos = { x: 1, y: 1 }; chase.player.dir = 'right'; chase.input('right');
     chase.ghosts[0].pos = { x: 8, y: 1 }; chase.ghosts[0].mode = 'normal';
     chase.update(.02); expect(chase.deaths).toBe(1); expect(chase.player.pos.x).toBeLessThan(8);
+  });
+  it('emits ordered achievement events and lets a returned echo be caught by the same energy orb', () => {
+    const g = playing(), events: { sequence: number; kind: string; powerId: number; ghostId: number | null }[] = [];
+    g.onAchievement = event => events.push(event);
+    const [x, y] = [...g.maze.powers][0].split(',').map(Number);
+    g.player.pos = { x, y }; g.input('up');
+    tick(g, .02);
+    expect(events[0]).toMatchObject({ sequence: 1, kind: 'power', powerId: 1 });
+    const ghost = g.ghosts[0]; ghost.pos = { ...g.player.pos }; ghost.mode = 'frightened'; ghost.release = 100;
+    tick(g, .02);
+    expect(events.at(-1)).toMatchObject({ sequence: 2, kind: 'capture', powerId: 1, ghostId: 0 });
+    ghost.pos = { x: 12, y: 16 }; ghost.next = { ...g.maze.house }; ghost.progress = .99; ghost.release = 0;
+    tick(g, .02); expect(ghost.mode).toBe('leaving');
+    ghost.pos = { x: 12, y: 16 }; ghost.next = { x: 11, y: 16 }; ghost.progress = .99; ghost.release = 0;
+    tick(g, .02); expect(ghost.mode).toBe('frightened');
+    expect(g.frightened).toBeGreaterThan(0);
   });
 });

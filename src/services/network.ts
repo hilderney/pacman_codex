@@ -1,115 +1,243 @@
-import { createClient, type Session, type SupabaseClient } from '@supabase/supabase-js';
-import type { RunResult } from '../game/engine';
+import type { AchievementEvent, RunResult } from '../game/engine';
+import { createBackend, resolveBackendMode, type AuthSession, type BackendMode, type DataAdapter, type AuthAdapter } from './backend';
+import type { AchievementProfile, RankingRow } from './backend/types';
 import { read, safeStorage, write } from './storage';
 
-export interface RankingRow { user_id: string; nickname: string; best_score: number; level_reached: number }
-export type PendingRun = RunResult & { userId: string };
+export type { RankingRow, AchievementProfile };
+export type PendingRun = RunResult & { userId: string; submissionId: string };
+
 export function queueRun(owner: string | null, result: RunResult) {
   // A guest run never acquires an owner later, including after Google login.
   if (!owner || result.score <= 0) return;
   const old = read<PendingRun | null>(`pending:${owner}`, null);
   if (!old || result.score > old.score || (result.score === old.score && result.level > old.level))
-    write(`pending:${owner}`, { ...result, userId: owner });
+    write(`pending:${owner}`, { ...result, userId: owner, submissionId: crypto.randomUUID() });
+}
+export function queueAchievement(owner: string | null, event: AchievementEvent) {
+  if (!owner) return;
+  const key = `achievement-events:${owner}`;
+  const queued = read<AchievementEvent[]>(key, []);
+  if (!queued.some(item => item.runId === event.runId && item.sequence === event.sequence)) {
+    queued.push(event); write(key, queued);
+  }
 }
 
 export class Network {
-  client: SupabaseClient | null = null;
-  session: Session | null = null;
+  /** @deprecated Prefer `available`; kept for older call sites/tests. */
+  client: { kind: BackendMode } | null = null;
+  session: AuthSession | null = null;
   nickname: string | null = null;
   profileReady = false;
+  mode: BackendMode = 'none';
   onChange: () => void = () => {};
+  onAchievements: (slugs: string[]) => void = () => {};
+  onSyncState: (updating: boolean) => void = () => {};
+  onSyncComplete: () => void = () => {};
+  private auth: AuthAdapter | null = null;
+  private data: DataAdapter | null = null;
   private flushing: Promise<'none' | 'pending' | 'synced' | 'rejected'> | null = null;
-  constructor() {
-    const url = import.meta.env.VITE_SUPABASE_URL;
-    // Supabase now labels the browser-safe key as "publishable". Keep the
-    // legacy anon name as a fallback so existing deployments keep working.
-    const token = import.meta.env.VITE_SUPABASE_PUB_KEY || import.meta.env.VITE_SUPABASE_ANON_KEY;
-    if (url && /^https:\/\/[a-z0-9-]+\.supabase\.co\/?$/.test(url) && token && !token.includes('YOUR_')) {
-      this.client = createClient(url, token, {
-        auth: { persistSession: true, autoRefreshToken: true, detectSessionInUrl: true, flowType: 'pkce', storage: safeStorage },
-        global: { fetch: (input, init) => fetch(input, { ...init, signal: AbortSignal.timeout(8000) }) },
-      });
+  private achievementFlush: Promise<void> | null = null;
+  private pendingFlush: Promise<['none' | 'pending' | 'synced' | 'rejected', void]> | null = null;
+  private syncOperations = 0;
+  private boot: Promise<void> | null = null;
+  private initialized = false;
+
+  constructor(auth?: AuthAdapter, data?: DataAdapter) {
+    if (auth && data) {
+      this.bind(auth, data);
+    } else {
+      this.mode = resolveBackendMode();
+      this.client = this.mode === 'none' ? null : { kind: this.mode };
     }
   }
+
+  private bind(auth: AuthAdapter, data: DataAdapter) {
+    this.auth = auth;
+    this.data = data;
+    this.mode = auth.kind;
+    this.client = auth.available ? { kind: this.mode } : null;
+  }
+
+  get available() {
+    if (this.auth) return this.auth.available;
+    return this.mode === 'local' || this.mode === 'supabase';
+  }
+  get isLocal() { return this.mode === 'local'; }
+  get updating() { return this.syncOperations > 0; }
+  hasPendingData() {
+    const id = this.session?.user.id;
+    if (!id) return false;
+    return read<PendingRun | null>(`pending:${id}`, null) !== null
+      || read<AchievementEvent[]>(`achievement-events:${id}`, []).length > 0;
+  }
+  listMockAccounts() { return this.auth?.listMockAccounts?.() ?? []; }
+
+  private async ensureBackend() {
+    if (this.auth && this.data) return;
+    if (!this.boot) {
+      this.boot = createBackend().then(backend => this.bind(backend.auth, backend.data));
+    }
+    await this.boot;
+  }
+
   async init() {
-    if (!this.client) return;
-    this.client.auth.onAuthStateChange((event, session) => {
+    await this.ensureBackend();
+    if (!this.auth?.available || !this.data || this.initialized) return;
+    this.initialized = true;
+    await Promise.all([this.auth.init(), this.data.init()]);
+    this.auth.onAuthStateChange((event, session) => {
       if (session?.user.id !== this.session?.user.id) this.profileReady = false;
       this.session = session;
       this.nickname = session ? read<string | null>(`nickname:${session.user.id}`, null) : null;
       this.onChange();
-      // Do not await another Supabase request inside the auth lock callback.
       if (event === 'SIGNED_IN' || event === 'INITIAL_SESSION') setTimeout(() => void this.loginSync(), 0);
     });
-    try {
-      const { data } = await this.client.auth.getSession(); this.session = data.session;
-      if (this.session) this.nickname = read(`nickname:${this.session.user.id}`, null);
-      this.onChange();
-    } catch { /* Cached/offline play stays available. */ }
+    this.session = this.auth.getSession();
+    if (this.session) this.nickname = read(`nickname:${this.session.user.id}`, null);
+    this.onChange();
+    if (this.session) setTimeout(() => void this.loginSync(), 0);
   }
+
   async loginSync() {
+    await this.ensureBackend();
     const userId = this.session?.user.id;
-    if (!this.client || !userId || !navigator.onLine) return;
+    if (!this.auth?.available || !userId || !navigator.onLine || !this.data?.ready) return;
     try {
-      const { data, error } = await this.client.from('profiles').select('nickname').eq('user_id', userId).maybeSingle();
+      const nickname = await this.data.getNickname(userId);
       if (this.session?.user.id !== userId) return;
-      this.profileReady = !error;
-      if (data) { this.nickname = data.nickname; write(`nickname:${userId}`, data.nickname); }
-      this.onChange(); await this.flush();
+      this.profileReady = true;
+      if (nickname) { this.nickname = nickname; write(`nickname:${userId}`, nickname); }
+      this.onChange();
     } catch { /* Retry at the next explicit sync point. */ }
   }
-  async signIn() {
-    if (!this.client || !navigator.onLine) throw new Error('unavailable');
-    const { error } = await this.client.auth.signInWithOAuth({ provider: 'google', options: { redirectTo: location.origin + '/' } });
-    if (error) throw error;
+
+  async signIn(accountId?: string) {
+    await this.ensureBackend();
+    if (!this.auth?.available || !navigator.onLine) throw new Error('unavailable');
+    await this.auth.signInWithGoogle(accountId);
+    this.session = this.auth.getSession();
+    if (this.session) this.nickname = read(`nickname:${this.session.user.id}`, null);
+    this.onChange();
   }
+
   async signOut() {
-    try { await this.client?.auth.signOut({ scope: 'local' }); } finally { this.session = null; this.nickname = null; this.onChange(); }
+    await this.ensureBackend();
+    try { await this.auth?.signOut(); }
+    finally { this.session = null; this.nickname = null; this.onChange(); }
   }
+
   async claim(nickname: string) {
-    if (!this.client || !this.session || !navigator.onLine) throw new Error('offline');
-    const { error } = await this.client.rpc('claim_nickname', { p_nickname: nickname });
-    if (error) throw error;
+    await this.ensureBackend();
+    if (!this.auth?.available || !this.session || !navigator.onLine || !this.data?.ready) throw new Error('offline');
+    await this.data.claimNickname(this.session.user.id, nickname);
     this.nickname = nickname; write(`nickname:${this.session.user.id}`, nickname); this.onChange();
   }
+
   flush(): Promise<'none' | 'pending' | 'synced' | 'rejected'> {
     if (this.flushing) return this.flushing;
-    this.flushing = this.flushOne().finally(() => { this.flushing = null; });
+    this.beginSync();
+    this.flushing = this.flushOne().finally(() => { this.flushing = null; this.endSync(); });
     return this.flushing;
   }
-  private async flushOne(): Promise<'none' | 'pending' | 'synced' | 'rejected'> {
+  flushAchievements(): Promise<void> {
+    if (this.achievementFlush) return this.achievementFlush;
+    this.beginSync();
+    this.achievementFlush = this.flushAchievementQueue().finally(() => { this.achievementFlush = null; this.endSync(); });
+    return this.achievementFlush;
+  }
+  flushPending(): Promise<['none' | 'pending' | 'synced' | 'rejected', void]> {
+    if (this.pendingFlush) return this.pendingFlush;
     const id = this.session?.user.id;
-    if (!id || !this.client) return 'none';
+    const hadScore = id ? read<PendingRun | null>(`pending:${id}`, null) !== null : false;
+    const achievementsBefore = id ? read<AchievementEvent[]>(`achievement-events:${id}`, []).length : 0;
+    this.pendingFlush = Promise.all([this.flush(), this.flushAchievements()]).then(result => {
+      const achievementsAfter = id ? read<AchievementEvent[]>(`achievement-events:${id}`, []).length : achievementsBefore;
+      if ((hadScore && result[0] === 'synced') || achievementsAfter < achievementsBefore) this.onSyncComplete();
+      return result;
+    }).finally(() => { this.pendingFlush = null; });
+    return this.pendingFlush;
+  }
+  pendingAchievements() {
+    const id = this.session?.user.id;
+    return id ? read<AchievementEvent[]>(`achievement-events:${id}`, []).length : 0;
+  }
+
+  private async flushAchievementQueue() {
+    await this.ensureBackend();
+    const id = this.session?.user.id;
+    if (!id || !this.auth?.available || !this.nickname || !navigator.onLine || !this.data?.ready) return;
+    const key = `achievement-events:${id}`;
+    while (this.session?.user.id === id && navigator.onLine) {
+      const batch = read<AchievementEvent[]>(key, []).slice(0, 32);
+      if (!batch.length) return;
+      try {
+        const { data, error } = await this.data.submitAchievementEvents(id, batch);
+        if (error) return;
+        const sent = new Set(batch.map(event => `${event.runId}:${event.sequence}`));
+        write(key, read<AchievementEvent[]>(key, []).filter(event => !sent.has(`${event.runId}:${event.sequence}`)));
+        if (Array.isArray(data) && data.length) this.onAchievements(data);
+      } catch { return; }
+    }
+  }
+
+  private beginSync() {
+    if (this.syncOperations++ === 0) this.onSyncState(true);
+  }
+  private endSync() {
+    this.syncOperations = Math.max(0, this.syncOperations - 1);
+    if (this.syncOperations === 0) this.onSyncState(false);
+  }
+
+  private async flushOne(): Promise<'none' | 'pending' | 'synced' | 'rejected'> {
+    await this.ensureBackend();
+    const id = this.session?.user.id;
+    if (!id || !this.auth?.available || !this.data) return 'none';
     const run = read<PendingRun | null>(`pending:${id}`, null);
     if (!run || run.userId !== id) return 'none';
-    if (!navigator.onLine || !this.nickname) return 'pending';
+    if (!navigator.onLine || !this.nickname || !this.data.ready) return 'pending';
     try {
-      const { error } = await this.client.rpc('submit_score', {
-        p_score: run.score, p_level: run.level, p_duration_ms: run.durationMs, p_run_id: run.runId,
+      const { error } = await this.data.submitScore(id, {
+        score: run.score, level: run.level, durationMs: run.durationMs, runId: run.submissionId ?? run.runId,
       });
       const permanent = error && (error.code === '22023' || error.code === '23514');
       if (!error || permanent) {
-        // Never erase a newer run queued while this request was in flight.
-        if (read<PendingRun | null>(`pending:${id}`, null)?.runId === run.runId) safeStorage.removeItem(`neon:pending:${id}`);
+        const current = read<PendingRun | null>(`pending:${id}`, null);
+        if (current?.submissionId === run.submissionId) safeStorage.removeItem(`neon:pending:${id}`);
+        else if (current && !permanent) setTimeout(() => void this.flush(), 0);
         return permanent ? 'rejected' : 'synced';
       }
       return 'pending';
     } catch { return 'pending'; }
   }
+
   async ranking(): Promise<{ rows: RankingRow[]; cached: boolean; available: boolean }> {
-    await this.flush();
+    await this.ensureBackend();
     const cache = read<RankingRow[]>('ranking', []);
-    if (!this.client || !navigator.onLine) return { rows: Array.isArray(cache) ? cache : [], cached: true, available: cache.length > 0 };
+    if (!this.auth?.available || !navigator.onLine || !this.data?.ready) {
+      return { rows: Array.isArray(cache) ? cache : [], cached: true, available: cache.length > 0 };
+    }
     try {
-      const { data, error } = await this.client.from('scores')
-        .select('user_id,best_score,level_reached,profiles!inner(nickname)')
-        .order('best_score', { ascending: false }).order('updated_at', { ascending: true }).order('user_id').limit(20);
-      if (error) throw error;
-      const rows = (data ?? []).map(row => ({
-        user_id: row.user_id, best_score: row.best_score, level_reached: row.level_reached,
-        nickname: (row.profiles as unknown as { nickname: string }).nickname,
-      }));
-      write('ranking', rows); return { rows, cached: false, available: true };
-    } catch { return { rows: Array.isArray(cache) ? cache : [], cached: true, available: cache.length > 0 }; }
+      const rows = await this.data.ranking();
+      write('ranking', rows);
+      return { rows, cached: false, available: true };
+    } catch {
+      return { rows: Array.isArray(cache) ? cache : [], cached: true, available: cache.length > 0 };
+    }
+  }
+
+  async profile(): Promise<AchievementProfile> {
+    await this.ensureBackend();
+    const id = this.session?.user.id;
+    const empty: AchievementProfile = { definitions: [], awards: [], candidates: [], bestScore: 0, levelReached: 0, cached: false, available: false };
+    if (!id) return empty;
+    const cached = read<AchievementProfile>(`achievement-profile:${id}`, empty);
+    if (!this.auth?.available || !navigator.onLine || !this.data?.ready) return { ...cached, cached: true };
+    try {
+      const result = { ...(await this.data.profile(id)), cached: false, available: true };
+      write(`achievement-profile:${id}`, result);
+      return result;
+    } catch {
+      return { ...cached, cached: true };
+    }
   }
 }

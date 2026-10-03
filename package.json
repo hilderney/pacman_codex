@@ -4,7 +4,9 @@
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.19.0",
-  "engines": { "node": ">=22.12" },
+  "engines": {
+    "node": ">=22.12"
+  },
   "scripts": {
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
@@ -12,17 +14,20 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "test:browser": "playwright test",
+    "reset:local-db": "node scripts/reset-local-db.mjs",
     "check": "tsc --noEmit && vitest run"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.57.0",
     "@use-gesture/vanilla": "^10.3.1",
+    "sql.js": "^1.14.2",
     "workbox-window": "^7.4.1"
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.3.14",
     "@playwright/test": "^1.55.0",
     "@types/node": "^24.0.0",
+    "@types/sql.js": "^1.4.11",
     "typescript": "~5.9.2",
     "vite": "^7.1.0",
     "vite-plugin-pwa": "^1.0.3",
