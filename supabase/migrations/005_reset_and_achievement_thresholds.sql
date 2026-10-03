@@ -1,12 +1,162 @@
--- Run after 001 and 002. Catalog is data, while award rules are reviewed code.
+-- Idempotent bootstrap + reset for achievements.
+-- Safe when 003 was never applied: creates missing tables/functions first.
+-- Requires 001 + 002 (profiles, scores, private.score_submissions).
+-- Wipes profiles/scores/achievement progress, reseeds 18 definitions, applies
+-- thresholds from src/achievements/config.json. Does NOT delete auth.users.
 begin;
 
-create table public.achievement_definitions (
+create schema if not exists private;
+revoke all on schema private from public, anon, authenticated;
+
+-- 1) Create achievement schema if missing (003 never applied).
+create table if not exists public.achievement_definitions (
   slug text primary key check (slug ~ '^[a-z][a-z0-9_]{2,63}$'),
   family_key text not null, tier integer not null default 1,
   badge_key text not null, exclusive boolean not null default false,
   active boolean not null default true, sort_order integer not null unique
 );
+create table if not exists public.player_achievements (
+  user_id uuid not null references public.profiles(user_id) on delete cascade,
+  slug text not null references public.achievement_definitions(slug),
+  awarded_at timestamptz not null default clock_timestamp(),
+  primary key(user_id,slug)
+);
+create table if not exists public.exclusive_holders (
+  slug text primary key references public.achievement_definitions(slug),
+  user_id uuid not null references public.profiles(user_id) on delete cascade,
+  awarded_at timestamptz not null default clock_timestamp()
+);
+create table if not exists private.achievement_candidates (
+  candidate_id bigint generated always as identity primary key,
+  slug text not null references public.achievement_definitions(slug),
+  user_id uuid not null references public.profiles(user_id) on delete cascade,
+  qualified_at timestamptz not null default clock_timestamp(),
+  unique(slug,user_id)
+);
+create table if not exists private.achievement_runs (
+  user_id uuid not null references public.profiles(user_id) on delete cascade,
+  run_id uuid not null, last_sequence bigint not null default 0,
+  elapsed_ms bigint not null default 0, cleared bigint not null default 0,
+  deaths bigint not null default 0, screen_deaths bigint not null default 0,
+  peak bigint not null default 0, tunnel_count bigint not null default 0,
+  power_id bigint not null default 0, power_started_ms bigint not null default 0,
+  captures bigint not null default 0,
+  ended boolean not null default false, primary key(user_id,run_id)
+);
+create table if not exists private.achievement_events (
+  user_id uuid not null, run_id uuid not null, sequence bigint not null,
+  kind text not null, payload jsonb not null, received_at timestamptz not null default clock_timestamp(),
+  primary key(user_id,run_id,sequence),
+  foreign key(user_id,run_id) references private.achievement_runs(user_id,run_id) on delete cascade
+);
+create table if not exists private.noob_runs (
+  user_id uuid not null references public.profiles(user_id) on delete cascade,
+  run_id uuid not null, primary key(user_id,run_id)
+);
+create table if not exists private.leaderboard_daily_leaders (
+  day_utc date primary key, user_id uuid not null references public.profiles(user_id) on delete cascade,
+  score bigint not null, captured_at timestamptz not null default clock_timestamp()
+);
+
+alter table public.achievement_definitions enable row level security;
+alter table public.player_achievements enable row level security;
+alter table public.exclusive_holders enable row level security;
+alter table private.achievement_candidates enable row level security;
+alter table private.achievement_runs enable row level security;
+alter table private.achievement_events enable row level security;
+alter table private.noob_runs enable row level security;
+alter table private.leaderboard_daily_leaders enable row level security;
+revoke all on public.achievement_definitions, public.player_achievements, public.exclusive_holders from public, anon, authenticated;
+grant select on public.achievement_definitions, public.player_achievements, public.exclusive_holders to anon, authenticated;
+drop policy if exists achievement_catalog_read on public.achievement_definitions;
+drop policy if exists achievement_awards_read on public.player_achievements;
+drop policy if exists achievement_exclusive_read on public.exclusive_holders;
+create policy achievement_catalog_read on public.achievement_definitions for select to anon,authenticated using(active);
+create policy achievement_awards_read on public.player_achievements for select to anon,authenticated using(true);
+create policy achievement_exclusive_read on public.exclusive_holders for select to anon,authenticated using(true);
+revoke all on private.achievement_candidates, private.achievement_runs, private.achievement_events,
+  private.noob_runs, private.leaderboard_daily_leaders from public, anon, authenticated;
+
+create or replace function private.award_achievement(p_user uuid,p_slug text)
+returns boolean language plpgsql security definer set search_path = '' as $$
+declare v_exclusive boolean; v_inserted uuid;
+begin
+  select exclusive into v_exclusive from public.achievement_definitions where slug=p_slug and active;
+  if v_exclusive is null then return false; end if;
+  if v_exclusive then
+    perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(p_slug,73));
+    insert into private.achievement_candidates(slug,user_id) values(p_slug,p_user) on conflict do nothing;
+    insert into public.exclusive_holders(slug,user_id) values(p_slug,p_user)
+      on conflict do nothing returning user_id into v_inserted;
+    return v_inserted is not null;
+  end if;
+  insert into public.player_achievements(user_id,slug) values(p_user,p_slug)
+    on conflict do nothing returning user_id into v_inserted;
+  return v_inserted is not null;
+end $$;
+revoke all on function private.award_achievement(uuid,text) from public,anon,authenticated;
+
+create or replace function private.transfer_exclusive_title()
+returns trigger language plpgsql security definer set search_path = '' as $$
+declare v_next uuid;
+begin
+  select user_id into v_next from private.achievement_candidates
+    where slug=old.slug and user_id<>old.user_id
+    order by candidate_id limit 1;
+  if v_next is not null then
+    insert into public.exclusive_holders(slug,user_id) values(old.slug,v_next) on conflict do nothing;
+  end if;
+  return old;
+end $$;
+drop trigger if exists transfer_exclusive_after_delete on public.exclusive_holders;
+create trigger transfer_exclusive_after_delete after delete on public.exclusive_holders
+  for each row execute function private.transfer_exclusive_title();
+
+create or replace function public.my_achievement_candidates()
+returns table(slug text, queue_position bigint) language sql security definer set search_path = '' as $$
+  select ranked.slug,ranked.queue_position from (
+    select c.slug,c.user_id,
+      row_number() over(partition by c.slug order by c.candidate_id)::bigint as queue_position
+    from private.achievement_candidates c
+  ) ranked where ranked.user_id=auth.uid();
+$$;
+revoke all on function public.my_achievement_candidates() from public,anon;
+grant execute on function public.my_achievement_candidates() to authenticated;
+
+create or replace function private.capture_daily_leader(p_day date)
+returns void language plpgsql security definer set search_path = '' as $$
+declare v_user uuid; v_score bigint;
+begin
+  if p_day is null or p_day>(clock_timestamp() at time zone 'UTC')::date then
+    raise exception 'Invalid snapshot day' using errcode='22023';
+  end if;
+  select user_id,best_score into v_user,v_score from public.scores
+    order by best_score desc,updated_at asc,user_id asc limit 1;
+  if v_user is null then return; end if;
+  insert into private.leaderboard_daily_leaders(day_utc,user_id,score) values(p_day,v_user,v_score) on conflict do nothing;
+  if (select count(*) from private.leaderboard_daily_leaders
+      where day_utc between p_day-29 and p_day and user_id=v_user)=30 then
+    perform private.award_achievement(v_user,'neon_maze_king');
+  end if;
+end $$;
+revoke all on function private.capture_daily_leader(date) from public,anon,authenticated;
+
+-- 2) Reset game data (tables now exist).
+truncate table
+  private.achievement_events,
+  private.achievement_runs,
+  private.achievement_candidates,
+  private.noob_runs,
+  private.leaderboard_daily_leaders,
+  private.score_submissions,
+  public.player_achievements,
+  public.exclusive_holders,
+  public.scores,
+  public.profiles,
+  public.achievement_definitions
+restart identity cascade;
+
+-- 3) Fresh catalog.
 insert into public.achievement_definitions(slug,family_key,tier,badge_key,exclusive,sort_order) values
 ('ace_spirit','survival',1,'halo',false,1),
 ('noob','survival',1,'spark_broken',false,2),
@@ -27,104 +177,8 @@ insert into public.achievement_definitions(slug,family_key,tier,badge_key,exclus
 ('phantom_septuplets','phantom',7,'phantom',false,17),
 ('phantom_octuplets','phantom',8,'phantom',false,18);
 
-create table public.player_achievements (
-  user_id uuid not null references public.profiles(user_id) on delete cascade,
-  slug text not null references public.achievement_definitions(slug),
-  awarded_at timestamptz not null default clock_timestamp(),
-  primary key(user_id,slug)
-);
-create table public.exclusive_holders (
-  slug text primary key references public.achievement_definitions(slug),
-  user_id uuid not null references public.profiles(user_id) on delete cascade,
-  awarded_at timestamptz not null default clock_timestamp()
-);
-create table private.achievement_candidates (
-  candidate_id bigint generated always as identity primary key,
-  slug text not null references public.achievement_definitions(slug),
-  user_id uuid not null references public.profiles(user_id) on delete cascade,
-  qualified_at timestamptz not null default clock_timestamp(),
-  unique(slug,user_id)
-);
-create table private.achievement_runs (
-  user_id uuid not null references public.profiles(user_id) on delete cascade,
-  run_id uuid not null, last_sequence bigint not null default 0,
-  elapsed_ms bigint not null default 0, cleared bigint not null default 0,
-  deaths bigint not null default 0, screen_deaths bigint not null default 0,
-  peak bigint not null default 0, tunnel_count bigint not null default 0,
-  power_id bigint not null default 0, power_started_ms bigint not null default 0,
-  captures bigint not null default 0,
-  ended boolean not null default false, primary key(user_id,run_id)
-);
-create table private.achievement_events (
-  user_id uuid not null, run_id uuid not null, sequence bigint not null,
-  kind text not null, payload jsonb not null, received_at timestamptz not null default clock_timestamp(),
-  primary key(user_id,run_id,sequence),
-  foreign key(user_id,run_id) references private.achievement_runs(user_id,run_id) on delete cascade
-);
-create table private.noob_runs (
-  user_id uuid not null references public.profiles(user_id) on delete cascade,
-  run_id uuid not null, primary key(user_id,run_id)
-);
-create table private.leaderboard_daily_leaders (
-  day_utc date primary key, user_id uuid not null references public.profiles(user_id) on delete cascade,
-  score bigint not null, captured_at timestamptz not null default clock_timestamp()
-);
-
-alter table public.achievement_definitions enable row level security;
-alter table public.player_achievements enable row level security;
-alter table public.exclusive_holders enable row level security;
-alter table private.achievement_candidates enable row level security;
-alter table private.achievement_runs enable row level security;
-alter table private.achievement_events enable row level security;
-alter table private.noob_runs enable row level security;
-alter table private.leaderboard_daily_leaders enable row level security;
-revoke all on public.achievement_definitions, public.player_achievements, public.exclusive_holders from public, anon, authenticated;
-grant select on public.achievement_definitions, public.player_achievements, public.exclusive_holders to anon, authenticated;
-create policy achievement_catalog_read on public.achievement_definitions for select to anon,authenticated using(active);
-create policy achievement_awards_read on public.player_achievements for select to anon,authenticated using(true);
-create policy achievement_exclusive_read on public.exclusive_holders for select to anon,authenticated using(true);
-revoke all on private.achievement_candidates, private.achievement_runs, private.achievement_events,
-  private.noob_runs, private.leaderboard_daily_leaders from public, anon, authenticated;
-
--- Called only by trusted database functions. An advisory lock serializes the
--- first qualification for an exclusive title, even across different players.
-create function private.award_achievement(p_user uuid,p_slug text)
-returns boolean language plpgsql security definer set search_path = '' as $$
-declare v_exclusive boolean; v_inserted uuid;
-begin
-  select exclusive into v_exclusive from public.achievement_definitions where slug=p_slug and active;
-  if v_exclusive is null then return false; end if;
-  if v_exclusive then
-    perform pg_catalog.pg_advisory_xact_lock(pg_catalog.hashtextextended(p_slug,73));
-    insert into private.achievement_candidates(slug,user_id) values(p_slug,p_user) on conflict do nothing;
-    insert into public.exclusive_holders(slug,user_id) values(p_slug,p_user)
-      on conflict do nothing returning user_id into v_inserted;
-    return v_inserted is not null;
-  end if;
-  insert into public.player_achievements(user_id,slug) values(p_user,p_slug)
-    on conflict do nothing returning user_id into v_inserted;
-  return v_inserted is not null;
-end $$;
-revoke all on function private.award_achievement(uuid,text) from public,anon,authenticated;
-
-create function private.transfer_exclusive_title()
-returns trigger language plpgsql security definer set search_path = '' as $$
-declare v_next uuid;
-begin
-  select user_id into v_next from private.achievement_candidates
-    where slug=old.slug and user_id<>old.user_id
-    order by candidate_id limit 1;
-  if v_next is not null then
-    insert into public.exclusive_holders(slug,user_id) values(old.slug,v_next) on conflict do nothing;
-  end if;
-  return old;
-end $$;
-create trigger transfer_exclusive_after_delete after delete on public.exclusive_holders
-  for each row execute function private.transfer_exclusive_title();
-
--- A batch is ordered by client sequence. Each event is accepted once; a gap
--- fails the transaction, so offline retries cannot silently skip milestones.
-create function public.submit_achievement_events(p_events jsonb)
+-- 4) Thresholds from src/achievements/config.json (version 1).
+create or replace function public.submit_achievement_events(p_events jsonb)
 returns text[] language plpgsql security definer set search_path = '' as $$
 declare
   v_user uuid := auth.uid(); v_item jsonb; v_run private.achievement_runs%rowtype;
@@ -206,8 +260,6 @@ begin
       v_run.screen_deaths:=v_run.screen_deaths+1;
       if v_penalty>500000 and private.award_achievement(v_user,'still_standing') then v_awards:=array_append(v_awards,'still_standing'); end if;
     elsif v_kind='clear' then
-      -- An offline batch may arrive at once, but its active-play clock still
-      -- needs a conservative floor for every completed screen.
       if v_elapsed < v_cleared * 8000 then
         raise exception 'Implausible clear duration' using errcode='22023'; end if;
       if v_run.screen_deaths=0 and private.award_achievement(v_user,'ace_spirit') then v_awards:=array_append(v_awards,'ace_spirit'); end if;
@@ -244,36 +296,5 @@ begin
 end $$;
 revoke all on function public.submit_achievement_events(jsonb) from public,anon;
 grant execute on function public.submit_achievement_events(jsonb) to authenticated;
-
-create function public.my_achievement_candidates()
-returns table(slug text, queue_position bigint) language sql security definer set search_path = '' as $$
-  select ranked.slug,ranked.queue_position from (
-    select c.slug,c.user_id,
-      row_number() over(partition by c.slug order by c.candidate_id)::bigint as queue_position
-    from private.achievement_candidates c
-  ) ranked where ranked.user_id=auth.uid();
-$$;
-revoke all on function public.my_achievement_candidates() from public,anon;
-grant execute on function public.my_achievement_candidates() to authenticated;
-
--- Run daily at 23:59 UTC from a trusted database cron job. Missing days stay
--- missing; they never count towards a 30-day streak.
-create function private.capture_daily_leader(p_day date)
-returns void language plpgsql security definer set search_path = '' as $$
-declare v_user uuid; v_score bigint;
-begin
-  if p_day is null or p_day>(clock_timestamp() at time zone 'UTC')::date then
-    raise exception 'Invalid snapshot day' using errcode='22023';
-  end if;
-  select user_id,best_score into v_user,v_score from public.scores
-    order by best_score desc,updated_at asc,user_id asc limit 1;
-  if v_user is null then return; end if;
-  insert into private.leaderboard_daily_leaders(day_utc,user_id,score) values(p_day,v_user,v_score) on conflict do nothing;
-  if (select count(*) from private.leaderboard_daily_leaders
-      where day_utc between p_day-29 and p_day and user_id=v_user)=30 then
-    perform private.award_achievement(v_user,'neon_maze_king');
-  end if;
-end $$;
-revoke all on function private.capture_daily_leader(date) from public,anon,authenticated;
 
 commit;

@@ -115,28 +115,39 @@ describe.sequential('achievement awards', () => {
     const award = await db.query<{ slug: string }>(`select slug from public.player_achievements where user_id='${bob}' and slug='neon_maze_king'`);
     expect(award.rows).toEqual([{ slug: 'neon_maze_king' }]);
   });
-  it('uses peak, effective death loss and 101 actual tunnel events', async () => {
+  it('uses peak, effective death loss and 100 tunnel events from config thresholds', async () => {
     await asUser(bob);
     const run = crypto.randomUUID();
-    expect(await send([event(run, 1, 'peak', { peak: 1000, balance: 1000 })])).toContain('spark_starter');
-    for (let i = 1; i <= 8; i++) await send([event(run, i + 1, 'clear', {
-      level: i, cleared: i, peak: 1000, balance: 1000,
-    })]);
-    expect(await send([event(run, 10, 'peak', { level: 9, cleared: 8, peak: 200000, balance: 200000 })])).toContain('spark_keeper');
-    for (let death = 1; death <= 15; death++) {
-      const penalty = 10 * 2 ** (death - 1);
-      const awards = await send([event(run, 10 + death, 'death', {
-        level: 9, cleared: 8, deaths: death, peak: 200000,
-        balance: 200000 - penalty, penalty,
+    // peak ≤ 25_000 × level: spark_starter needs level ≥ 20, spark_keeper level ≥ 40.
+    for (let cleared = 1; cleared <= 39; cleared++) {
+      await send([event(run, cleared, 'clear', {
+        level: cleared, cleared, elapsedMs: cleared * 10000, peak: cleared * 100, balance: cleared * 100,
       })]);
-      expect(awards.includes('still_standing')).toBe(death === 15);
     }
-    for (let start = 26; start <= 126; start += 25) {
-      const batch = Array.from({ length: Math.min(25, 127 - start) }, (_, index) =>
-        event(run, start + index, 'tunnel', { level: 9, cleared: 8, deaths: 15, peak: 200000,
-          balance: 36160, penalty: 163840 }));
+    expect(await send([event(run, 40, 'peak', {
+      level: 40, cleared: 39, peak: 500000, balance: 500000, elapsedMs: 400000,
+    })])).toContain('spark_starter');
+    expect(await send([event(run, 41, 'peak', {
+      level: 40, cleared: 39, peak: 1000000, balance: 1000000, elapsedMs: 410000,
+    })])).toContain('spark_keeper');
+    // still_standing: penalty > 500000 → first at death 17 (655360); peak must cover it.
+    for (let death = 1; death <= 17; death++) {
+      const penalty = 10 * 2 ** (death - 1);
+      const awards = await send([event(run, 41 + death, 'death', {
+        level: 40, cleared: 39, deaths: death, peak: 1000000,
+        balance: 1000000 - penalty, penalty, elapsedMs: 410000 + death * 1000,
+      })]);
+      expect(awards.includes('still_standing')).toBe(death === 17);
+    }
+    // tunnel_loop awards at tunnels >= 100 (sequences 59..158 after 41+17=58).
+    for (let start = 59; start <= 158; start += 25) {
+      const batch = Array.from({ length: Math.min(25, 159 - start) }, (_, index) =>
+        event(run, start + index, 'tunnel', {
+          level: 40, cleared: 39, deaths: 17, peak: 1000000,
+          balance: 1000000 - 655360, penalty: 655360, elapsedMs: 500000 + (start + index) * 10,
+        }));
       const awards = await send(batch);
-      expect(awards.includes('tunnel_loop')).toBe(start === 126);
+      expect(awards.includes('tunnel_loop')).toBe(start === 134);
     }
   });
 });
