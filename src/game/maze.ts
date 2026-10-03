@@ -7,15 +7,18 @@ export function walkable(maze: Maze, p: Point, ghosts = false): boolean {
   const tile = maze.tiles[p.y]?.[p.x];
   return tile === Tile.Floor || (ghosts && (tile === Tile.House || tile === Tile.Door));
 }
+
 export function neighbor(maze: Maze, p: Point, direction: keyof typeof VECTOR, ghosts = false): Point | null {
   const v = VECTOR[direction];
   const next = { x: p.x + v.x, y: p.y + v.y };
   if (maze.tunnels.includes(next.y)) next.x = (next.x + maze.width) % maze.width;
   return walkable(maze, next, ghosts) ? next : null;
 }
+
 export function neighbors(maze: Maze, p: Point, ghosts = false): Point[] {
   return DIRECTIONS.map(d => neighbor(maze, p, d, ghosts)).filter((n): n is Point => n !== null);
 }
+
 export function flood(maze: Maze, start: Point, ghosts = false): Set<string> {
   const seen = new Set([key(start)]), queue = [start];
   for (let i = 0; i < queue.length; i++) {
