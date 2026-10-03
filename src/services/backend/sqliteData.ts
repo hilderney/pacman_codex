@@ -1,4 +1,5 @@
 import type { AchievementEvent } from '../../game/engine';
+import { achievementThreshold } from '../../achievements/config';
 import { BackendError, type AchievementProfile, type DataAdapter, type RankingRow } from './types';
 import { SqliteStore } from './sqliteStore';
 
@@ -203,12 +204,8 @@ export class SqliteData implements DataAdapter {
               throw new BackendError('Invalid capture', '22023');
             }
             captures += 1;
-            const phantoms = this.store.all<{ slug: string }>(
-              "select slug from achievement_definitions where family_key = 'phantom' and tier <= ? and active = 1",
-              [captures],
-            );
-            for (const row of phantoms) {
-              if (this.award(userId, row.slug)) awards.push(row.slug);
+            for (const slug of ['phantom_quartet', 'phantom_quintuplets', 'phantom_sextuplets', 'phantom_septuplets', 'phantom_octuplets']) {
+              if (captures >= (achievementThreshold(slug).captures ?? Number.MAX_SAFE_INTEGER) && this.award(userId, slug)) awards.push(slug);
             }
           } else if (kind === 'death') {
             const maxPenalty = Math.min(MAX_SAFE, 10 * 2 ** Math.min(deaths - 1, 50));
@@ -216,34 +213,34 @@ export class SqliteData implements DataAdapter {
               throw new BackendError('Invalid penalty', '22023');
             }
             screenDeaths += 1;
-            if (penalty > 100000 && this.award(userId, 'still_standing')) awards.push('still_standing');
+            if (penalty > (achievementThreshold('still_standing').penaltyGreaterThan ?? 100000) && this.award(userId, 'still_standing')) awards.push('still_standing');
           } else if (kind === 'clear') {
             if (elapsed < cleared * 8000) throw new BackendError('Implausible clear duration', '22023');
-            if (screenDeaths === 0 && this.award(userId, 'ace_spirit')) awards.push('ace_spirit');
+            if (screenDeaths === (achievementThreshold('ace_spirit').screenDeaths ?? 0) && this.award(userId, 'ace_spirit')) awards.push('ace_spirit');
             screenDeaths = 0;
             if (deaths === 0) {
-              if (cleared >= 25 && this.award(userId, 'amazind_circuit')) awards.push('amazind_circuit');
-              if (cleared >= 50 && this.award(userId, 'first_light')) awards.push('first_light');
-              if (cleared >= 100 && this.award(userId, 'perfect_circuit')) awards.push('perfect_circuit');
-              if (cleared >= 250 && this.award(userId, 'ominius_circuit')) awards.push('ominius_circuit');
-              if (cleared >= 500 && this.award(userId, 'light_bringer')) awards.push('light_bringer');
+              for (const slug of ['amazind_circuit', 'first_light', 'perfect_circuit', 'ominius_circuit', 'light_bringer']) {
+                const threshold = achievementThreshold(slug);
+                if (cleared >= (threshold.cleared ?? Number.MAX_SAFE_INTEGER) && deaths === (threshold.deaths ?? 0) && this.award(userId, slug)) awards.push(slug);
+              }
             }
-            if (cleared >= 50 && this.award(userId, 'neon_pioneer')) awards.push('neon_pioneer');
+            if (cleared >= (achievementThreshold('neon_pioneer').cleared ?? Number.MAX_SAFE_INTEGER) && this.award(userId, 'neon_pioneer')) awards.push('neon_pioneer');
           } else if (kind === 'tunnel') {
             tunnelCount += 1;
-            if (tunnelCount >= 101 && this.award(userId, 'tunnel_loop')) awards.push('tunnel_loop');
+            if (tunnelCount >= (achievementThreshold('tunnel_loop').tunnels ?? Number.MAX_SAFE_INTEGER) && this.award(userId, 'tunnel_loop')) awards.push('tunnel_loop');
           } else if (kind === 'over') {
             if (balance !== 0 || deaths === 0) throw new BackendError('Invalid game over', '22023');
             ended = 1;
             if (run.cleared === 0) {
               this.store.run('insert or ignore into noob_runs(user_id, run_id) values(?, ?)', [userId, runId]);
               const noobs = this.store.scalar<number>('select count(*) from noob_runs where user_id = ?', [userId]) ?? 0;
-              if (noobs >= 3 && this.award(userId, 'noob')) awards.push('noob');
+              if (noobs >= (achievementThreshold('noob').gameOvers ?? Number.MAX_SAFE_INTEGER) && this.award(userId, 'noob')) awards.push('noob');
             }
           }
 
-          if (peak >= 1000 && deaths === 0 && this.award(userId, 'spark_starter')) awards.push('spark_starter');
-          if (peak >= 100000 && this.award(userId, 'spark_keeper')) awards.push('spark_keeper');
+          const starter = achievementThreshold('spark_starter');
+          if (peak >= (starter.peak ?? Number.MAX_SAFE_INTEGER) && deaths === (starter.deaths ?? 0) && this.award(userId, 'spark_starter')) awards.push('spark_starter');
+          if (peak >= (achievementThreshold('spark_keeper').peak ?? Number.MAX_SAFE_INTEGER) && this.award(userId, 'spark_keeper')) awards.push('spark_keeper');
 
           this.store.run(
             `update achievement_runs set last_sequence=?, elapsed_ms=?, cleared=?, deaths=?, screen_deaths=?,

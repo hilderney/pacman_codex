@@ -52,6 +52,7 @@ On the Codex Windows environment, if pnpm shims are missing, use `node node_modu
 | `src/services/network.ts` | Google Auth, profile, leaderboard, and per-user queue |
 | `src/services/backend/` | Auth/data adapters: Supabase (prod) and SQLite + mock Google (dev) |
 | `src/achievements/catalog.ts` | Localized achievement names and original SVG badge geometry |
+| `src/achievements/config.json` | Editable achievement thresholds used by the local/dev tracker and SQLite backend |
 | `src/i18n/en.ts` | Centralized English UI strings |
 | `supabase/migrations/001_neon_maze.sql` | Tables, indexes, RLS, and RPCs |
 | `supabase/migrations/002_endless_runs.sql` | Endless screens migration and speed-adjusted duration validation |
@@ -75,6 +76,8 @@ New rules, also applied to the house and doors (inaccessible to the player):
 The outer frame is the only exception to wall limits, preserving a closed outline and two tunnels. That does not exempt interior walls near the border. House and doors count as walls for player rules, though authorized ghosts may cross them. If final validation fails, the generator tries another seed up to 64 times. Stages use `initialSeed + (stage - 1) × 7919`.
 
 The 1,200-seed test performs its own tile checks, wall components, full pickup coverage, closed boundaries, doors, and variety. Regression cases reproduce the red, blue, and yellow issues from the reference image. Simulation tests cover penalties, peak balance, restart, screens cleared, doubled speed at screen 100, advancing past 999, and high-speed collisions.
+
+Achievement targets are kept in `src/achievements/config.json`. Change values such as `cleared`, `peak`, `tunnels`, `captures`, `gameOvers`, or `penaltyGreaterThan` while tuning a development build; the immediate client feedback and the local SQLite backend read the same file. The Supabase RPC remains the production authority and must be updated in `supabase/migrations/003_achievements.sql` before publishing a changed threshold to the online leaderboard.
 
 ### Offline and data
 

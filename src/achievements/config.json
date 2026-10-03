@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "thresholds": {
+    "ace_spirit": { "screenDeaths": 0 },
+    "noob": { "gameOvers": 3, "maxCleared": 0 },
+    "neon_maze_king": { "days": 30 },
+    "first_light": { "cleared": 50, "deaths": 0 },
+    "light_bringer": { "cleared": 500, "deaths": 0 },
+    "neon_pioneer": { "cleared": 50 },
+    "spark_starter": { "peak": 500000, "deaths": 0 },
+    "spark_keeper": { "peak": 1000000 },
+    "still_standing": { "penaltyGreaterThan": 500000 },
+    "tunnel_loop": { "tunnels": 100 },
+    "amazind_circuit": { "cleared": 25, "deaths": 0 },
+    "perfect_circuit": { "cleared": 100, "deaths": 0 },
+    "ominius_circuit": { "cleared": 250, "deaths": 0 },
+    "phantom_quartet": { "captures": 4 },
+    "phantom_quintuplets": { "captures": 5 },
+    "phantom_sextuplets": { "captures": 6 },
+    "phantom_septuplets": { "captures": 7 },
+    "phantom_octuplets": { "captures": 8 }
+  }
+}

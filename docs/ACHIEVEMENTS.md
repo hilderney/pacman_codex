@@ -22,10 +22,10 @@ As metas formam famílias de dificuldade e somam 18 insígnias. Cada nível tem 
 | 4 | **First Light** / `first_light` | Ser a primeira pessoa a concluir **50 telas em uma partida sem morrer**. | Exclusiva | Prisma aceso sobre o número 50 |
 | 5 | **Light Bringer** / `light_bringer` | Ser a primeira pessoa a concluir **500 telas em uma partida sem morrer**. | Exclusiva | Farol neon de cinco feixes |
 | 6 | **Neon Pioneer** / `neon_pioneer` | Ser a primeira pessoa a concluir **50 telas em uma partida**; mortes são permitidas. | Exclusiva | Bandeira em forma de raio |
-| 7 | **Spark Starter** / `spark_starter` | Alcançar **1.000 pontos de saldo** em uma partida antes da primeira morte. | Permanente | Constelação de faíscas |
-| 8 | **Spark Keeper** / `spark_keeper` | Alcançar **100.000 pontos de saldo de pico** em uma partida. | Permanente | Prisma carregado |
-| 9 | **Still Standing** / `still_standing` | Perder uma vida com **desconto efetivo superior a 100.000 pontos**. | Permanente | Escudo rachado com pulso aceso |
-| 10 | **Tunnel Loop** / `tunnel_loop` | Atravessar túneis laterais **mais de 100 vezes** na mesma partida (101 travessias ou mais). | Permanente | Dois portais ligados por 101 pulsos |
+| 7 | **Spark Starter** / `spark_starter` | Alcançar **500.000 pontos de saldo** em uma partida antes da primeira morte. | Permanente | Constelação de faíscas |
+| 8 | **Spark Keeper** / `spark_keeper` | Alcançar **1.000.000 pontos de saldo de pico** em uma partida. | Permanente | Prisma carregado |
+| 9 | **Still Standing** / `still_standing` | Perder uma vida com **desconto efetivo superior a 500.000 pontos**. | Permanente | Escudo rachado com pulso aceso |
+| 10 | **Tunnel Loop** / `tunnel_loop` | Atravessar túneis laterais **100 vezes** na mesma partida. | Permanente | Dois portais ligados por 100 pulsos |
 | 11 | **Amazind Circuit** / `amazind_circuit` | Concluir **25 telas na mesma partida sem nenhuma morte**. | Permanente | Circuito de um anel |
 | 12 | **Perfect Circuit** / `perfect_circuit` | Concluir **100 telas na mesma partida sem nenhuma morte**. | Permanente | Circuito de dois anéis |
 | 13 | **Ominius Circuit** / `ominius_circuit` | Concluir **250 telas na mesma partida sem nenhuma morte**. | Permanente | Circuito de três anéis |
@@ -35,7 +35,7 @@ As metas formam famílias de dificuldade e somam 18 insígnias. Cada nível tem 
 | 17 | **Phantom Septuplets** / `phantom_septuplets` | Capturar **7 ecos** sob uma única bola de energia. | Permanente | Sete losangos convergentes |
 | 18 | **Phantom Octuplets** / `phantom_octuplets` | Capturar **8 ecos** sob uma única bola de energia. | Permanente | Oito losangos convergentes |
 
-Os nomes, descrições e ícones são dados de catálogo; os limites fazem parte das regras SQL versionadas. Alterar o texto não muda o `slug` nem apaga conquistas já concedidas. Novas regras exigem migration e teste, embora novas definições e famílias possam ser cadastradas sem alterar os prêmios existentes. Os nomes **Amazind** e **Ominius** foram mantidos como escritos no pedido; a grafia de exibição pode ser revisada antes do lançamento sem trocar os `slugs` depois de publicados.
+Os nomes, descrições e ícones são dados de catálogo; os limites editáveis para desenvolvimento ficam em `src/achievements/config.json`, enquanto a validação de produção permanece nas regras SQL versionadas. Alterar o texto ou a configuração local não muda o `slug` nem apaga conquistas já concedidas. Novas regras exigem migration e teste, embora novas definições e famílias possam ser cadastradas sem alterar os prêmios existentes. Os nomes **Amazind** e **Ominius** foram mantidos como escritos no pedido; a grafia de exibição pode ser revisada antes do lançamento sem trocar os `slugs` depois de publicados.
 
 ### Detalhes que evitam interpretações diferentes
 
@@ -45,11 +45,17 @@ Os nomes, descrições e ícones são dados de catálogo; os limites fazem parte
 - **Exclusivas**: a ordem é a hora em que o banco aceitou o evento de qualificação, não o relógio do navegador. Empates são resolvidos por um ID sequencial do banco. Uma conta apagada remove seu título e sua candidatura; a realocação do título ocorre numa transação. Se não houver candidato restante, a conquista fica vaga.
 - **Família Circuit e First Light/Light Bringer**: a contagem começa na tela 1 de uma única partida autenticada. Qualquer morte invalida a tentativa sem mortes dessa partida, mesmo que o jogador continue e volte a completar telas. `cleared` conta telas concluídas, não a tela atual.
 - **First Light e Neon Pioneer** podem ser obtidas pela mesma pessoa no mesmo evento de 50 telas sem mortes; são disputas independentes. **Light Bringer** é outra disputa, com alvo de 500.
-- **Spark Starter** usa o saldo de pico antes da primeira morte, contando qualquer fonte de pontos. **Spark Keeper** usa o saldo de pico, mesmo com mortes anteriores; 100.000 não são pontos acumulados brutos.
-- **Still Standing** mede `lastPenalty` realmente subtraído, e não apenas a penalidade nominal. Pela progressão 10, 20, 40…, o primeiro desconto nominal acima de 100.000 é 163.840 na 15ª morte; o saldo antes dela precisa ser maior que 100.000 para a conquista. Sobreviver à morte não é requisito adicional.
-- **Tunnel Loop** conta uma travessia quando o jogador cruza a borda `x=0 ↔ x=27` em qualquer uma das duas linhas de túnel. Ir e voltar são duas travessias. Movimentos dos ecos não contam. O contador zera ao começar outra partida.
+- **Spark Starter** usa o saldo de pico antes da primeira morte, contando qualquer fonte de pontos (`peak` ≥ 500.000 e `deaths` = 0). **Spark Keeper** usa o saldo de pico, mesmo com mortes anteriores (`peak` ≥ 1.000.000); não são pontos acumulados brutos.
+- **Still Standing** mede `lastPenalty` realmente subtraído (`penalty` > 500.000), e não apenas a penalidade nominal. Pela progressão 10, 20, 40…, o primeiro desconto nominal acima de 500.000 é 655.360 na 17ª morte; o saldo antes dela precisa ser maior que 500.000 para a conquista. Sobreviver à morte não é requisito adicional.
+- **Tunnel Loop** conta uma travessia quando o jogador cruza a borda `x=0 ↔ x=27` em qualquer uma das duas linhas de túnel. Ir e voltar são duas travessias. A meta é `tunnels` ≥ 100. Movimentos dos ecos não contam. O contador zera ao começar outra partida.
 - **Família Phantom**: cada captura de eco conta uma vez, inclusive se o mesmo eco voltar da casa e for capturado novamente. Um segundo orbe inicia uma nova janela e zera o contador; capturas não se somam entre orbes. Alcançar 8 libera também os níveis 4–7 ainda não obtidos.
 - **Phantom 5–8**: existem quatro ecos, mas um eco que volta da casa pode ficar assustado novamente enquanto o mesmo orbe ainda está ativo. A energia dura 14 segundos e a espera de reentrada é 0,35 segundo, para permitir capturas repetidas. O multiplicador de pontos dos ecos continua com seu teto atual; os níveis Phantom contam capturas, não pontos.
+
+## Configuração de metas
+
+Os números ajustáveis ficam em [`src/achievements/config.json`](../src/achievements/config.json). Cada slug pode declarar `cleared`, `peak`, `tunnels`, `captures`, `gameOvers` ou `penaltyGreaterThan`, além de `deaths` quando a conquista exige uma partida sem mortes. O tracker de feedback imediato e o backend SQLite usado em desenvolvimento leem esse mesmo arquivo, então é possível experimentar valores sem alterar a lógica TypeScript.
+
+O Supabase continua validando as conquistas no servidor. Depois de escolher os valores finais, replique-os na migration `003_achievements.sql` antes de publicar, para que o RPC online e o cliente não tenham metas diferentes.
 
 ## Dados e segurança no Supabase
 
